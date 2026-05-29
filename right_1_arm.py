@@ -35,6 +35,7 @@ PHASE_LAG_COST_WEIGHT = 0.35  # 相位滞后在基础代价中的权重。
 AMPLITUDE_RATIO_COST_WEIGHT = 0.35  # 幅值比在基础代价中的权重。
 KP_INTERVAL_TOLERANCE = 0.001  # 三分搜索区间宽度小于此值时提前收敛。
 KP_MIN_ITERATIONS = 2  # 即使已达标，也至少跑这么多轮再停止。
+DEFAULT_KP_RANGE = 0.2  # 自动调参时，在当前 Kp 上下各浮动此值作为默认搜索范围。
 
 
 @dataclass
@@ -1212,17 +1213,23 @@ def parse_args() -> argparse.Namespace:  # 定义并解析命令行参数。
         default=DEFAULT_KP_ALIAS,
         help=f"EtherCAT alias of the joint drive. Default: {DEFAULT_KP_ALIAS}",
     )
-    parser.add_argument(  # 添加可选参数 `--kp-min`，用于指定自动调参下界。
+    parser.add_argument(  # 添加可选参数 `--kp-min`，不指定时自动在当前 Kp 下方浮动 kp_range。
         "--kp-min",
         type=float,
-        default=0.2,
-        help="Lower bound of Kp search interval. Default: 0.2",
+        default=None,
+        help="Lower bound of Kp search interval. Default: current_kp - kp_range",
     )
-    parser.add_argument(  # 添加可选参数 `--kp-max`，用于指定自动调参上界。
+    parser.add_argument(  # 添加可选参数 `--kp-max`，不指定时自动在当前 Kp 上方浮动 kp_range。
         "--kp-max",
         type=float,
-        default=0.5,
-        help="Upper bound of Kp search interval. Default: 0.5",
+        default=None,
+        help="Upper bound of Kp search interval. Default: current_kp + kp_range",
+    )
+    parser.add_argument(  # 添加可选参数 `--kp-range`，在当前 Kp 上下各浮动此值构成默认搜索区间。
+        "--kp-range",
+        type=float,
+        default=DEFAULT_KP_RANGE,
+        help=f"Kp search range offset from current Kp. Default: {DEFAULT_KP_RANGE}",
     )
     parser.add_argument(  # 添加可选参数 `--kp-index`，用于覆盖 SDO index。
         "--kp-index",
@@ -1422,19 +1429,20 @@ def main() -> int:  # 主函数，返回进程退出码。
         return KpTrialResult(kp=kp, tracker=tracker, metrics=metrics)
 
     def auto_tune_kp(req: MotionRequest) -> AutoTuneResult:  # 在给定区间内自动搜索一个代价更低的位置环 Kp。
-        if args.kp_min >= args.kp_max:
-            raise RuntimeError("--kp-min must be smaller than --kp-max")
         if args.kp_iterations < 1:
             raise RuntimeError("--kp-iterations must be at least 1")
 
         original_kp = read_kp(args.kp_alias, args.kp_index, args.kp_subindex)
-        print(f"kp_original: {original_kp:.6f}")
+        kp_range = args.kp_range
+        low = max(0.0, original_kp - kp_range) if args.kp_min is None else args.kp_min
+        high = original_kp + kp_range if args.kp_max is None else args.kp_max
+        if low >= high:
+            raise RuntimeError(f"Kp search interval is empty or inverted: [{low:.6f}, {high:.6f}]")
+        print(f"kp_original: {original_kp:.6f}, search_interval: [{low:.6f}, {high:.6f}]")
         _, reset_position = node.wait_for_controller_state(req.state_timeout)
         baseline_result = evaluate_kp_candidate(original_kp, reset_position, req)
         print_metrics(baseline_result.metrics, prefix=f"kp={original_kp:.6f} ")
 
-        low = args.kp_min
-        high = args.kp_max
         history: list[KpTrialResult] = []
         best: Optional[KpTrialResult] = baseline_result
         evaluated_costs: dict[int, float] = {}
