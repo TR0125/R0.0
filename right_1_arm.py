@@ -33,9 +33,15 @@ OVERSHOOT_HARD_PENALTY = 1000.0  # 一旦出现超调就施加硬惩罚，使“
 RMSE_COST_WEIGHT = 1.0  # RMSE 在基础代价中的权重。
 PHASE_LAG_COST_WEIGHT = 0.35  # 相位滞后在基础代价中的权重。
 AMPLITUDE_RATIO_COST_WEIGHT = 0.35  # 幅值比在基础代价中的权重。
-KP_INTERVAL_TOLERANCE = 0.001  # 三分搜索区间宽度小于此值时提前收敛。
+KP_INTERVAL_TOLERANCE = 0.001  # Kp 搜索区间宽度小于此值时，可认为搜索范围已经足够收敛。
 KP_MIN_ITERATIONS = 2  # 即使已达标，也至少跑这么多轮再停止。
 DEFAULT_KP_RANGE = 0.2  # 自动调参时，在当前 Kp 上下各浮动此值作为默认搜索范围。
+KP_BAYES_GRID_SIZE = 81  # 贝叶斯优化候选网格密度；一维问题下用稠密网格即可稳定选点。
+KP_BAYES_INITIAL_SAMPLE_COUNT = 3  # 先在区间内做少量种子点评估，再交给 GP+EI 精细选点。
+KP_BAYES_NOISE_VARIANCE = 1e-6  # 高斯过程观测噪声项，避免协方差矩阵奇异。
+KP_BAYES_JITTER = 1e-9  # 数值稳定抖动项，避免 Cholesky 分解因舍入误差失败。
+KP_BAYES_EI_TOLERANCE = 1e-6  # Expected Improvement 低于此值时，认为继续搜索价值很低。
+KP_DUPLICATE_TOLERANCE = 1e-4  # 候选 Kp 若与历史点过近，则视为重复点，不再重复评估。
 
 
 @dataclass
@@ -130,6 +136,13 @@ class AutoTuneResult:  # 自动调参的完整结果，替代多元组返回。
     original_kp: float  # 调参前的原始 Kp。
     baseline_result: "KpTrialResult"  # 原始 Kp 的基线试验结果。
     reset_position: float  # 基线试验时使用的统一起始位置。
+
+
+@dataclass
+class GaussianProcessPrediction:  # 保存一维高斯过程在候选网格上的均值与标准差预测。
+    xs: list[float]
+    means: list[float]
+    stds: list[float]
 
 
 def find_reference_change_index(
@@ -519,6 +532,138 @@ def save_kp_trials_csv(
                 }
             )
     return str(output)
+
+
+def _normal_pdf(value: float) -> float:  # 标准正态分布概率密度函数，供 EI 计算使用。
+    return math.exp(-0.5 * value * value) / math.sqrt(2.0 * math.pi)
+
+
+def _normal_cdf(value: float) -> float:  # 标准正态分布累计分布函数，供 EI 计算使用。
+    return 0.5 * (1.0 + math.erf(value / math.sqrt(2.0)))
+
+
+def _estimate_gp_length_scale(xs: list[float], low: float, high: float) -> float:  # 用区间宽度和样本密度估计一维 GP 的长度尺度。
+    span = max(high - low, KP_INTERVAL_TOLERANCE)
+    if len(xs) < 2:
+        return max(span / 3.0, KP_INTERVAL_TOLERANCE)
+    sorted_xs = sorted(xs)
+    gaps = [sorted_xs[index + 1] - sorted_xs[index] for index in range(len(sorted_xs) - 1)]
+    mean_gap = sum(gaps) / len(gaps)
+    return max(span / 6.0, mean_gap * 1.5, KP_INTERVAL_TOLERANCE)
+
+
+def _rbf_kernel(x1: float, x2: float, length_scale: float) -> float:  # 一维 RBF 核，用于拟合 Kp->cost 的平滑代理模型。
+    delta = (x1 - x2) / max(length_scale, KP_INTERVAL_TOLERANCE)
+    return math.exp(-0.5 * delta * delta)
+
+
+def _solve_linear_system(matrix: list[list[float]], vector: list[float]) -> list[float]:  # 用高斯消元求解线性方程组，避免额外依赖 numpy。
+    size = len(vector)
+    augmented = [row[:] + [value] for row, value in zip(matrix, vector)]
+    for pivot_index in range(size):
+        pivot_row = max(range(pivot_index, size), key=lambda row_index: abs(augmented[row_index][pivot_index]))
+        if abs(augmented[pivot_row][pivot_index]) < KP_BAYES_JITTER:
+            raise RuntimeError("Gaussian process linear system is singular")
+        if pivot_row != pivot_index:
+            augmented[pivot_index], augmented[pivot_row] = augmented[pivot_row], augmented[pivot_index]
+
+        pivot = augmented[pivot_index][pivot_index]
+        for column_index in range(pivot_index, size + 1):
+            augmented[pivot_index][column_index] /= pivot
+
+        for row_index in range(size):
+            if row_index == pivot_index:
+                continue
+            factor = augmented[row_index][pivot_index]
+            if abs(factor) < KP_BAYES_JITTER:
+                continue
+            for column_index in range(pivot_index, size + 1):
+                augmented[row_index][column_index] -= factor * augmented[pivot_index][column_index]
+
+    return [augmented[row_index][size] for row_index in range(size)]
+
+
+def fit_gaussian_process(
+    xs: list[float],
+    ys: list[float],
+    grid: list[float],
+    low: float,
+    high: float,
+) -> GaussianProcessPrediction:  # 在一维网格上拟合高斯过程并输出均值/标准差，供 EI 选点使用。
+    if len(xs) != len(ys) or not xs:
+        raise ValueError("Gaussian process requires non-empty paired observations")
+
+    length_scale = _estimate_gp_length_scale(xs, low, high)
+    covariance = []
+    for row_index, x_row in enumerate(xs):
+        row = []
+        for column_index, x_col in enumerate(xs):
+            value = _rbf_kernel(x_row, x_col, length_scale)
+            if row_index == column_index:
+                value += KP_BAYES_NOISE_VARIANCE + KP_BAYES_JITTER
+            row.append(value)
+        covariance.append(row)
+
+    alpha = _solve_linear_system(covariance, ys)
+    means: list[float] = []
+    stds: list[float] = []
+    for x_star in grid:
+        k_star = [_rbf_kernel(x_star, x_train, length_scale) for x_train in xs]
+        mean = sum(weight * target for weight, target in zip(k_star, alpha))
+        v = _solve_linear_system(covariance, k_star)
+        variance = max(
+            KP_BAYES_JITTER,
+            1.0 + KP_BAYES_NOISE_VARIANCE - sum(left * right for left, right in zip(k_star, v)),
+        )
+        means.append(mean)
+        stds.append(math.sqrt(variance))
+
+    return GaussianProcessPrediction(xs=grid, means=means, stds=stds)
+
+
+def expected_improvement(
+    prediction: GaussianProcessPrediction,
+    best_cost: float,
+) -> list[float]:  # 基于 GP 预测计算每个候选点的 Expected Improvement。
+    improvements: list[float] = []
+    for mean, std in zip(prediction.means, prediction.stds):
+        if std <= KP_BAYES_JITTER:
+            improvements.append(max(0.0, best_cost - mean))
+            continue
+        z_value = (best_cost - mean) / std
+        ei = (best_cost - mean) * _normal_cdf(z_value) + std * _normal_pdf(z_value)
+        improvements.append(max(0.0, ei))
+    return improvements
+
+
+def choose_next_kp_via_bayes(
+    observed_kps: list[float],
+    observed_costs: list[float],
+    low: float,
+    high: float,
+) -> tuple[float, float]:  # 用一维 GP+EI 从当前区间里选出下一个最值得评估的 Kp。
+    if not observed_kps:
+        raise ValueError("At least one observation is required for Bayesian selection")
+
+    if high - low < KP_INTERVAL_TOLERANCE:
+        midpoint = low + (high - low) / 2.0
+        return midpoint, 0.0
+
+    grid = [
+        low + (high - low) * index / (KP_BAYES_GRID_SIZE - 1)
+        for index in range(KP_BAYES_GRID_SIZE)
+    ]
+    prediction = fit_gaussian_process(observed_kps, observed_costs, grid, low, high)
+    eis = expected_improvement(prediction, min(observed_costs))
+
+    ranked_indices = sorted(range(len(grid)), key=lambda index: eis[index], reverse=True)
+    for index in ranked_indices:
+        candidate = grid[index]
+        if min(abs(candidate - observed) for observed in observed_kps) >= KP_DUPLICATE_TOLERANCE:
+            return candidate, eis[index]
+
+    midpoint = low + (high - low) / 2.0
+    return midpoint, 0.0
 
 
 def extract_position(values, index: int) -> float:  # 从 controller_state 的 positions 数组中按索引取目标关节值。
@@ -1445,43 +1590,75 @@ def main() -> int:  # 主函数，返回进程退出码。
 
         history: list[KpTrialResult] = []
         best: Optional[KpTrialResult] = baseline_result
-        evaluated_costs: dict[int, float] = {}
-        evaluated_costs[round(original_kp, 6)] = baseline_result.metrics.cost
+        evaluated_trials: dict[int, KpTrialResult] = {}
+        evaluated_trials[round(original_kp, 6)] = baseline_result
 
         try:
-            for iteration in range(args.kp_iterations):
-                if high - low < KP_INTERVAL_TOLERANCE:
-                    print(f"kp_search[{iteration + 1}/{args.kp_iterations}]: interval converged ({low:.6f}, {high:.6f})")
+            seed_candidates = [
+                low + (high - low) * index / max(1, KP_BAYES_INITIAL_SAMPLE_COUNT - 1)
+                for index in range(KP_BAYES_INITIAL_SAMPLE_COUNT)
+            ]
+            for seed_kp in seed_candidates:
+                if len(history) >= args.kp_iterations:
+                    break
+                seed_key = round(seed_kp, 6)
+                if seed_key in evaluated_trials:
+                    continue
+                print(
+                    f"kp_search[{len(history) + 1}/{args.kp_iterations}]: seed kp={seed_kp:.6f}, interval=({low:.6f}, {high:.6f})"
+                )
+                seed_result = evaluate_kp_candidate(seed_kp, reset_position, req)
+                print_metrics(seed_result.metrics, prefix=f"kp={seed_kp:.6f} ")
+                history.append(seed_result)
+                evaluated_trials[seed_key] = seed_result
+                if best is None or seed_result.metrics.cost < best.metrics.cost:
+                    best = seed_result
+                if best.metrics.meets_target and len(history) >= KP_MIN_ITERATIONS:
                     break
 
-                left = low + (high - low) / 3.0
-                right = high - (high - low) / 3.0
-                print(f"kp_search[{iteration + 1}/{args.kp_iterations}]: interval=({low:.6f}, {high:.6f})")
+            while len(history) < args.kp_iterations:
+                if high - low < KP_INTERVAL_TOLERANCE:
+                    print(
+                        f"kp_search[{len(history) + 1}/{args.kp_iterations}]: interval converged ({low:.6f}, {high:.6f})"
+                    )
+                    break
 
-                left_key = round(left, 6)
-                if left_key not in evaluated_costs:
-                    left_result = evaluate_kp_candidate(left, reset_position, req)
-                    print_metrics(left_result.metrics, prefix=f"kp={left:.6f} ")
-                    history.append(left_result)
-                    evaluated_costs[left_key] = left_result.metrics.cost
-                    if best is None or left_result.metrics.cost < best.metrics.cost:
-                        best = left_result
+                observed_trials = sorted(evaluated_trials.values(), key=lambda trial: trial.kp)
+                observed_kps = [trial.kp for trial in observed_trials]
+                observed_costs = [trial.metrics.cost for trial in observed_trials]
+                candidate_kp, candidate_ei = choose_next_kp_via_bayes(observed_kps, observed_costs, low, high)
+                candidate_key = round(candidate_kp, 6)
+                print(
+                    f"kp_search[{len(history) + 1}/{args.kp_iterations}]: bayes kp={candidate_kp:.6f}, ei={candidate_ei:.6f}, interval=({low:.6f}, {high:.6f})"
+                )
 
-                right_key = round(right, 6)
-                if right_key not in evaluated_costs:
-                    right_result = evaluate_kp_candidate(right, reset_position, req)
-                    print_metrics(right_result.metrics, prefix=f"kp={right:.6f} ")
-                    history.append(right_result)
-                    evaluated_costs[right_key] = right_result.metrics.cost
-                    if best is None or right_result.metrics.cost < best.metrics.cost:
-                        best = right_result
+                if candidate_ei < KP_BAYES_EI_TOLERANCE and len(history) >= KP_MIN_ITERATIONS:
+                    print(
+                        f"kp_search[{len(history) + 1}/{args.kp_iterations}]: expected improvement too small, stop search"
+                    )
+                    break
 
-                if evaluated_costs[left_key] <= evaluated_costs[right_key]:
-                    high = right
-                else:
-                    low = left
+                if candidate_key in evaluated_trials:
+                    print(
+                        f"kp_search[{len(history) + 1}/{args.kp_iterations}]: candidate already evaluated, stop search"
+                    )
+                    break
 
-                if best.metrics.meets_target and iteration + 1 >= KP_MIN_ITERATIONS:
+                candidate_result = evaluate_kp_candidate(candidate_kp, reset_position, req)
+                print_metrics(candidate_result.metrics, prefix=f"kp={candidate_kp:.6f} ")
+                history.append(candidate_result)
+                evaluated_trials[candidate_key] = candidate_result
+                if best is None or candidate_result.metrics.cost < best.metrics.cost:
+                    best = candidate_result
+
+                sorted_kps = sorted(observed_kps + [candidate_kp])
+                best_index = sorted_kps.index(best.kp)
+                left_bound = sorted_kps[max(0, best_index - 1)] if best_index > 0 else low
+                right_bound = sorted_kps[min(len(sorted_kps) - 1, best_index + 1)] if best_index < len(sorted_kps) - 1 else high
+                low = max(low, left_bound - KP_DUPLICATE_TOLERANCE)
+                high = min(high, right_bound + KP_DUPLICATE_TOLERANCE)
+
+                if best.metrics.meets_target and len(history) >= KP_MIN_ITERATIONS:
                     break
 
             if best is None:
