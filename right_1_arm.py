@@ -35,9 +35,20 @@ PHASE_LAG_COST_WEIGHT = 0.35  # 相位滞后在基础代价中的权重。
 AMPLITUDE_RATIO_COST_WEIGHT = 0.35  # 幅值比在基础代价中的权重。
 KP_INTERVAL_TOLERANCE = 0.001  # Kp 搜索区间宽度小于此值时，可认为搜索范围已经足够收敛。
 KP_MIN_ITERATIONS = 2  # 即使已达标，也至少跑这么多轮再停止。
-DEFAULT_KP_RANGE = 0.2  # 自动调参时，在当前 Kp 上下各浮动此值作为默认搜索范围。
+DEFAULT_KP_RELATIVE_RANGE_RATIO = 0.1  # 自动调参默认先在当前 Kp 的 ±10% 小区间内搜索。
+DEFAULT_KP_HARD_MAX_FACTOR = 2.0  # 自动调参时，hard_max 默认为 original_kp 的此倍数。
+DEFAULT_KP_HARD_MAX_FLOOR = 0.63  # 自动推算 hard_max 时保底值，确保不会低于此值。
+KP_EXPANSION_FACTOR = 1.05  # 当最优点安全且贴近上边界时，把上界再扩大 5%。
+KP_MAX_EXPANSIONS = 2  # 最多向上扩展的次数，避免无限外推。
+KP_EXPANSION_WINDOW_RATIO = 0.05  # 每次扩展后以下一阶段最优点下方 5% 作为新的局部搜索下界。
+KP_SAFE_PHASE_LAG_RATIO = 0.8  # “相位滞后有余量”的判定比例，即需小于目标值的 80%。
+KP_SAFE_AMPLITUDE_RATIO = 0.98  # “幅值比有余量”的判定下限。
+KP_UPPER_BOUND_PROXIMITY_RATIO = 0.15  # 最优点距上边界在区间宽度的 15% 内，视为贴近上边界。
+KP_UPPER_BOUND_PROXIMITY_ABS = 0.005  # 判断贴近上边界时的绝对最小阈值。
+KP_SIGNIFICANT_IMPROVEMENT_RATIO = 0.05  # 相对 cost 改善达到 5% 视为“仍明显改善”。
+KP_SIGNIFICANT_IMPROVEMENT_ABS = 0.1  # 绝对 cost 改善达到 0.1 视为“仍明显改善”。
 KP_BAYES_GRID_SIZE = 81  # 贝叶斯优化候选网格密度；一维问题下用稠密网格即可稳定选点。
-KP_BAYES_INITIAL_SAMPLE_COUNT = 3  # 先在区间内做少量种子点评估，再交给 GP+EI 精细选点。
+KP_BAYES_INITIAL_SAMPLE_COUNT = 5  # 每个阶段先在区间内等距采样，使 GP 有足够内部观测点产生有意义的 EI。
 KP_BAYES_NOISE_VARIANCE = 1e-6  # 高斯过程观测噪声项，避免协方差矩阵奇异。
 KP_BAYES_JITTER = 1e-9  # 数值稳定抖动项，避免 Cholesky 分解因舍入误差失败。
 KP_BAYES_EI_TOLERANCE = 1e-6  # Expected Improvement 低于此值时，认为继续搜索价值很低。
@@ -664,6 +675,38 @@ def choose_next_kp_via_bayes(
 
     midpoint = low + (high - low) / 2.0
     return midpoint, 0.0
+
+
+def is_safe_kp_trial(trial: KpTrialResult) -> bool:  # 判断某个 Kp 试验是否满足“完全达标”的严格安全条件（不再用于扩展决策）。
+    metrics = trial.metrics
+    return (
+        metrics.meets_target
+        and metrics.overshoot_rad <= POSITION_EPSILON
+        and metrics.phase_lag_deg <= PHASE_LAG_TARGET_DEG * KP_SAFE_PHASE_LAG_RATIO
+        and metrics.amplitude_ratio >= max(KP_SAFE_AMPLITUDE_RATIO, AMPLITUDE_RATIO_MIN)
+    )
+
+
+def is_expand_safe(trial: KpTrialResult) -> bool:  # 判断某个 Kp 试验是否满足“可继续向上扩展”的宽松安全条件：无超调且幅值比达标即可。
+    metrics = trial.metrics
+    return (
+        metrics.overshoot_rad <= POSITION_EPSILON
+        and metrics.amplitude_ratio >= AMPLITUDE_RATIO_MIN
+    )
+
+
+def is_near_upper_bound(kp: float, low: float, high: float) -> bool:  # 判断当前最优点是否已经贴近当前搜索区间上边界。
+    threshold = max(KP_UPPER_BOUND_PROXIMITY_ABS, (high - low) * KP_UPPER_BOUND_PROXIMITY_RATIO)
+    return kp >= high - threshold
+
+
+def has_recent_significant_improvement(improvements: list[tuple[float, float]]) -> bool:  # 检查最近两次最佳 cost 改善是否仍然明显。
+    if len(improvements) < 2:
+        return False
+    return all(
+        absolute >= KP_SIGNIFICANT_IMPROVEMENT_ABS or relative >= KP_SIGNIFICANT_IMPROVEMENT_RATIO
+        for absolute, relative in improvements[-2:]
+    )
 
 
 def extract_position(values, index: int) -> float:  # 从 controller_state 的 positions 数组中按索引取目标关节值。
@@ -1370,11 +1413,17 @@ def parse_args() -> argparse.Namespace:  # 定义并解析命令行参数。
         default=None,
         help="Upper bound of Kp search interval. Default: current_kp + kp_range",
     )
-    parser.add_argument(  # 添加可选参数 `--kp-range`，在当前 Kp 上下各浮动此值构成默认搜索区间。
+    parser.add_argument(  # 添加可选参数 `--kp-range`，用于显式指定绝对浮动量；默认改用当前 Kp 的相对小区间。
         "--kp-range",
         type=float,
-        default=DEFAULT_KP_RANGE,
-        help=f"Kp search range offset from current Kp. Default: {DEFAULT_KP_RANGE}",
+        default=None,
+        help="Absolute Kp search offset from current Kp. Default: use current_kp ±10%",
+    )
+    parser.add_argument(  # 添加可选参数 `--kp-hard-max`，限制自动调参时允许探索的绝对最高 Kp。
+        "--kp-hard-max",
+        type=float,
+        default=0.0,
+        help=f"Absolute hard upper limit for Kp auto-tuning. 0 means auto-derive from original_kp * {DEFAULT_KP_HARD_MAX_FACTOR} (floor {DEFAULT_KP_HARD_MAX_FLOOR})",
     )
     parser.add_argument(  # 添加可选参数 `--kp-index`，用于覆盖 SDO index。
         "--kp-index",
@@ -1578,96 +1627,170 @@ def main() -> int:  # 主函数，返回进程退出码。
             raise RuntimeError("--kp-iterations must be at least 1")
 
         original_kp = read_kp(args.kp_alias, args.kp_index, args.kp_subindex)
-        kp_range = args.kp_range
-        low = max(0.0, original_kp - kp_range) if args.kp_min is None else args.kp_min
-        high = original_kp + kp_range if args.kp_max is None else args.kp_max
+        hard_max = args.kp_hard_max
+        if hard_max <= 0.0:
+            hard_max = max(original_kp * DEFAULT_KP_HARD_MAX_FACTOR, DEFAULT_KP_HARD_MAX_FLOOR)
+            print(f"kp_hard_max not specified, auto-derived: {hard_max:.6f} (original_kp * {DEFAULT_KP_HARD_MAX_FACTOR}, floor {DEFAULT_KP_HARD_MAX_FLOOR})")
+        if original_kp > hard_max:
+            raise RuntimeError(
+                f"Current Kp {original_kp:.6f} exceeds the configured hard max {hard_max:.6f}"
+            )
+
+        if args.kp_min is not None:
+            low = max(0.0, args.kp_min)
+        elif args.kp_range is not None:
+            low = max(0.0, original_kp - args.kp_range)
+        else:
+            low = max(0.0, original_kp * (1.0 - DEFAULT_KP_RELATIVE_RANGE_RATIO))
+
+        if args.kp_max is not None:
+            high = min(args.kp_max, hard_max)
+        elif args.kp_range is not None:
+            high = min(original_kp + args.kp_range, hard_max)
+        else:
+            high = min(original_kp * (1.0 + DEFAULT_KP_RELATIVE_RANGE_RATIO), hard_max)
+
         if low >= high:
-            raise RuntimeError(f"Kp search interval is empty or inverted: [{low:.6f}, {high:.6f}]")
-        print(f"kp_original: {original_kp:.6f}, search_interval: [{low:.6f}, {high:.6f}]")
+            raise RuntimeError(f"Kp search interval is empty or inverted after hard-max clamp: [{low:.6f}, {high:.6f}]")
+        print(
+            f"kp_original: {original_kp:.6f}, search_interval: [{low:.6f}, {high:.6f}], hard_max: {hard_max:.6f}"
+        )
         _, reset_position = node.wait_for_controller_state(req.state_timeout)
         baseline_result = evaluate_kp_candidate(original_kp, reset_position, req)
         print_metrics(baseline_result.metrics, prefix=f"kp={original_kp:.6f} ")
 
         history: list[KpTrialResult] = []
         best: Optional[KpTrialResult] = baseline_result
+        best_safe: Optional[KpTrialResult] = baseline_result if is_safe_kp_trial(baseline_result) else None
         evaluated_trials: dict[int, KpTrialResult] = {}
         evaluated_trials[round(original_kp, 6)] = baseline_result
+        best_improvements: list[tuple[float, float]] = []
+        expansion_count = 0
 
         try:
-            seed_candidates = [
-                low + (high - low) * index / max(1, KP_BAYES_INITIAL_SAMPLE_COUNT - 1)
-                for index in range(KP_BAYES_INITIAL_SAMPLE_COUNT)
-            ]
-            for seed_kp in seed_candidates:
-                if len(history) >= args.kp_iterations:
-                    break
-                seed_key = round(seed_kp, 6)
-                if seed_key in evaluated_trials:
-                    continue
-                print(
-                    f"kp_search[{len(history) + 1}/{args.kp_iterations}]: seed kp={seed_kp:.6f}, interval=({low:.6f}, {high:.6f})"
-                )
-                seed_result = evaluate_kp_candidate(seed_kp, reset_position, req)
-                print_metrics(seed_result.metrics, prefix=f"kp={seed_kp:.6f} ")
-                history.append(seed_result)
-                evaluated_trials[seed_key] = seed_result
-                if best is None or seed_result.metrics.cost < best.metrics.cost:
-                    best = seed_result
-                if best.metrics.meets_target and len(history) >= KP_MIN_ITERATIONS:
-                    break
+            def register_trial(trial: KpTrialResult) -> None:
+                nonlocal best, best_safe
+                trial_key = round(trial.kp, 6)
+                history.append(trial)
+                evaluated_trials[trial_key] = trial
+                if best is None or trial.metrics.cost < best.metrics.cost:
+                    best = trial
+                if is_safe_kp_trial(trial) and (best_safe is None or trial.metrics.cost < best_safe.metrics.cost):
+                    previous_best_cost = best_safe.metrics.cost if best_safe is not None else None
+                    best_safe = trial
+                    if previous_best_cost is not None:
+                        improvement_abs = previous_best_cost - trial.metrics.cost
+                        improvement_rel = improvement_abs / max(abs(previous_best_cost), KP_BAYES_JITTER)
+                        best_improvements.append((improvement_abs, improvement_rel))
 
             while len(history) < args.kp_iterations:
-                if high - low < KP_INTERVAL_TOLERANCE:
-                    print(
-                        f"kp_search[{len(history) + 1}/{args.kp_iterations}]: interval converged ({low:.6f}, {high:.6f})"
-                    )
-                    break
-
-                observed_trials = sorted(evaluated_trials.values(), key=lambda trial: trial.kp)
-                observed_kps = [trial.kp for trial in observed_trials]
-                observed_costs = [trial.metrics.cost for trial in observed_trials]
-                candidate_kp, candidate_ei = choose_next_kp_via_bayes(observed_kps, observed_costs, low, high)
-                candidate_key = round(candidate_kp, 6)
-                print(
-                    f"kp_search[{len(history) + 1}/{args.kp_iterations}]: bayes kp={candidate_kp:.6f}, ei={candidate_ei:.6f}, interval=({low:.6f}, {high:.6f})"
+                stage_label = f"expand#{expansion_count}" if expansion_count > 0 else "initial"
+                stage_seed_candidates = (
+                    [low, high]
+                    if KP_BAYES_INITIAL_SAMPLE_COUNT == 2
+                    else [
+                        low + (high - low) * index / max(1, KP_BAYES_INITIAL_SAMPLE_COUNT - 1)
+                        for index in range(KP_BAYES_INITIAL_SAMPLE_COUNT)
+                    ]
                 )
-
-                if candidate_ei < KP_BAYES_EI_TOLERANCE and len(history) >= KP_MIN_ITERATIONS:
+                stage_progress = False
+                for seed_kp in stage_seed_candidates:
+                    if len(history) >= args.kp_iterations:
+                        break
+                    seed_key = round(seed_kp, 6)
+                    if seed_key in evaluated_trials:
+                        continue
                     print(
-                        f"kp_search[{len(history) + 1}/{args.kp_iterations}]: expected improvement too small, stop search"
+                        f"kp_search[{len(history) + 1}/{args.kp_iterations}]: {stage_label} seed kp={seed_kp:.6f}, interval=({low:.6f}, {high:.6f})"
+                    )
+                    seed_result = evaluate_kp_candidate(seed_kp, reset_position, req)
+                    print_metrics(seed_result.metrics, prefix=f"kp={seed_kp:.6f} ")
+                    register_trial(seed_result)
+                    stage_progress = True
+
+                while len(history) < args.kp_iterations:
+                    if high - low < KP_INTERVAL_TOLERANCE:
+                        print(
+                            f"kp_search[{len(history) + 1}/{args.kp_iterations}]: {stage_label} interval converged ({low:.6f}, {high:.6f})"
+                        )
+                        break
+
+                    observed_trials = sorted(
+                        (
+                            trial for trial in evaluated_trials.values()
+                            if low - KP_DUPLICATE_TOLERANCE <= trial.kp <= high + KP_DUPLICATE_TOLERANCE
+                        ),
+                        key=lambda trial: trial.kp,
+                    )
+                    if len(observed_trials) < 2:
+                        break
+                    observed_kps = [trial.kp for trial in observed_trials]
+                    observed_costs = [trial.metrics.cost for trial in observed_trials]
+                    candidate_kp, candidate_ei = choose_next_kp_via_bayes(observed_kps, observed_costs, low, high)
+                    candidate_key = round(candidate_kp, 6)
+                    print(
+                        f"kp_search[{len(history) + 1}/{args.kp_iterations}]: {stage_label} bayes kp={candidate_kp:.6f}, ei={candidate_ei:.6f}, interval=({low:.6f}, {high:.6f})"
+                    )
+
+                    if candidate_ei < KP_BAYES_EI_TOLERANCE and len(history) >= KP_MIN_ITERATIONS:
+                        print(
+                            f"kp_search[{len(history) + 1}/{args.kp_iterations}]: {stage_label} expected improvement too small, stop stage"
+                        )
+                        break
+
+                    if candidate_key in evaluated_trials:
+                        print(
+                            f"kp_search[{len(history) + 1}/{args.kp_iterations}]: {stage_label} candidate already evaluated, stop stage"
+                        )
+                        break
+
+                    candidate_result = evaluate_kp_candidate(candidate_kp, reset_position, req)
+                    print_metrics(candidate_result.metrics, prefix=f"kp={candidate_kp:.6f} ")
+                    register_trial(candidate_result)
+                    stage_progress = True
+
+
+                active_best = best_safe if best_safe is not None else best
+                if active_best is None:
+                    break
+                if len(history) >= args.kp_iterations:
+                    break
+                if not stage_progress:
+                    print(
+                        f"kp_search[{len(history) + 1}/{args.kp_iterations}]: {stage_label} no new candidate, stop search"
                     )
                     break
-
-                if candidate_key in evaluated_trials:
-                    print(
-                        f"kp_search[{len(history) + 1}/{args.kp_iterations}]: candidate already evaluated, stop search"
-                    )
+                if expansion_count >= KP_MAX_EXPANSIONS:
+                    break
+                if best_safe is None:
+                    break
+                if not is_near_upper_bound(best_safe.kp, low, high):
+                    break
+                if not has_recent_significant_improvement(best_improvements):
+                    break
+                if not is_expand_safe(best_safe):
+                    break
+                if high >= hard_max - KP_DUPLICATE_TOLERANCE:
                     break
 
-                candidate_result = evaluate_kp_candidate(candidate_kp, reset_position, req)
-                print_metrics(candidate_result.metrics, prefix=f"kp={candidate_kp:.6f} ")
-                history.append(candidate_result)
-                evaluated_trials[candidate_key] = candidate_result
-                if best is None or candidate_result.metrics.cost < best.metrics.cost:
-                    best = candidate_result
-
-                sorted_kps = sorted(observed_kps + [candidate_kp])
-                best_index = sorted_kps.index(best.kp)
-                left_bound = sorted_kps[max(0, best_index - 1)] if best_index > 0 else low
-                right_bound = sorted_kps[min(len(sorted_kps) - 1, best_index + 1)] if best_index < len(sorted_kps) - 1 else high
-                low = max(low, left_bound - KP_DUPLICATE_TOLERANCE)
-                high = min(high, right_bound + KP_DUPLICATE_TOLERANCE)
-
-                if best.metrics.meets_target and len(history) >= KP_MIN_ITERATIONS:
+                new_high = min(hard_max, high * KP_EXPANSION_FACTOR)
+                new_low = max(0.0, best_safe.kp * (1.0 - KP_EXPANSION_WINDOW_RATIO))
+                if new_high <= high + KP_DUPLICATE_TOLERANCE or new_low >= new_high:
                     break
+                expansion_count += 1
+                print(
+                    f"kp_search_expand[{expansion_count}/{KP_MAX_EXPANSIONS}]: safe best kp={best_safe.kp:.6f}, interval=({low:.6f}, {high:.6f}) -> ({new_low:.6f}, {new_high:.6f})"
+                )
+                low, high = new_low, new_high
 
             if best is None:
                 raise RuntimeError("Kp auto-tuning produced no valid trials")
 
-            write_kp(args.kp_alias, args.kp_index, args.kp_subindex, best.kp)
-            print(f"kp_best: {best.kp:.6f}")
+            selected_best = best_safe if best_safe is not None else best
+            write_kp(args.kp_alias, args.kp_index, args.kp_subindex, selected_best.kp)
+            print(f"kp_best: {selected_best.kp:.6f}")
             return AutoTuneResult(
-                best_kp=best.kp,
+                best_kp=selected_best.kp,
                 history=history,
                 original_kp=original_kp,
                 baseline_result=baseline_result,
