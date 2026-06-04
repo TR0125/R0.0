@@ -20,39 +20,52 @@ DEFAULT_KP_ALIAS = 1109  # 右臂一关节在 EtherCAT 上的固定 alias。
 DEFAULT_KP_INDEX = "0x2006"  # 位置环 P 参数的 SDO index。
 DEFAULT_KP_SUBINDEX = 0  # 位置环 P 参数的 SDO subindex。
 FLOAT_PATTERN = re.compile(r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?")  # 用于从命令输出中提取浮点数字。
-RMSE_TARGET_DEG = 0.01  # 目标 RMSE，按角度制指定为 0.01 度，便于和调参目标直接对应。
-RMSE_TARGET_RAD = math.radians(RMSE_TARGET_DEG)  # 内部统一换算成弧度参与归一化和达标判断。
-PHASE_LAG_TARGET_DEG = 2.0  # 相位滞后目标，按角度制指定为 2 度。
+RMSE_TARGET_DEG = 0.01  # 搜索代价中的 RMSE 参考目标，按角度制指定为 0.01 度。
+RMSE_TARGET_RAD = math.radians(RMSE_TARGET_DEG)  # 搜索代价内部统一换算成弧度参与归一化。
+PHASE_LAG_TARGET_DEG = 2.0  # 搜索代价中的相位滞后参考目标，按角度制指定为 2 度。
 PHASE_LAG_EVAL_FREQUENCY_HZ = 1.0  # 用于把时间延迟换算成相位角的等效频率，默认按 1 Hz 解释。
 AMPLITUDE_RATIO_TARGET = 1.0  # 幅值比理想值为 1.0。
-AMPLITUDE_RATIO_MIN = 0.95  # 工程上希望幅值比不低于 0.95。
+AMPLITUDE_RATIO_MIN = 0.95  # 搜索和阶段过渡判定使用的最低幅值比要求。
 RMSE_EXCESS_PENALTY_WEIGHT = 100.0  # RMSE 超过目标后施加的大罚分，保证搜索优先压低 RMSE。
 PHASE_LAG_EXCESS_PENALTY_WEIGHT = 50.0  # 相位滞后超过目标角度后施加的附加罚分。
 AMPLITUDE_RATIO_DEFICIT_PENALTY_WEIGHT = 80.0  # 幅值比低于 0.95 后施加的附加罚分。
-OVERSHOOT_HARD_PENALTY = 1000.0  # 一旦出现超调就施加硬惩罚，使“无超调”成为近似硬约束。
+OVERSHOOT_HARD_PENALTY = 1000.0  # 超过阈值后施加超调硬惩罚，使“无显著超调”成为近似硬约束。
+OVERSHOOT_STRICT_MAX_RAD = 1e-4  # 最终严格验收允许的最大超调。
+OVERSHOOT_PENALTY_THRESHOLD = 5e-5  # 搜索代价中开始施加超调硬惩罚的阈值。
+OVERSHOOT_EXPAND_MAX_RAD = 1.5e-4  # 允许进入下一阶段时的超调上限。
+STRICT_RMSE_MAX_DEG = 0.02  # 最终严格验收使用的 RMSE 阈值，按角度制指定。
+STRICT_RMSE_MAX_RAD = math.radians(STRICT_RMSE_MAX_DEG)  # 最终严格验收内部统一换算成弧度。
+STRICT_PHASE_LAG_MAX_DEG = 20.0  # 最终严格验收使用的相位滞后阈值。
+STRICT_AMPLITUDE_RATIO_MIN = 0.98  # 最终严格验收使用的最小幅值比。
 RMSE_COST_WEIGHT = 1.0  # RMSE 在基础代价中的权重。
-PHASE_LAG_COST_WEIGHT = 0.35  # 相位滞后在基础代价中的权重。
-AMPLITUDE_RATIO_COST_WEIGHT = 0.35  # 幅值比在基础代价中的权重。
+PHASE_LAG_COST_WEIGHT = 0.8  # 相位滞后在基础代价中的权重，增强动态性能影响。
+AMPLITUDE_RATIO_COST_WEIGHT = 0.25  # 幅值比在基础代价中的权重。
+SMOOTHNESS_COST_WEIGHT = 0.5  # 尾部平滑度在搜索代价中的权重，抑制高频抖动。
+UNSTABLE_PENALTY = 2000.0  # 一旦判定尾部不稳定，额外施加大罚分，避免把抖动点选为最优。
 KP_INTERVAL_TOLERANCE = 0.001  # Kp 搜索区间宽度小于此值时，可认为搜索范围已经足够收敛。
 KP_MIN_ITERATIONS = 2  # 即使已达标，也至少跑这么多轮再停止。
-DEFAULT_KP_RELATIVE_RANGE_RATIO = 0.1  # 自动调参默认先在当前 Kp 的 ±10% 小区间内搜索。
-DEFAULT_KP_HARD_MAX_FACTOR = 2.0  # 自动调参时，hard_max 默认为 original_kp 的此倍数。
-DEFAULT_KP_HARD_MAX_FLOOR = 0.63  # 自动推算 hard_max 时保底值，确保不会低于此值。
-KP_EXPANSION_FACTOR = 1.05  # 当最优点安全且贴近上边界时，把上界再扩大 5%。
-KP_MAX_EXPANSIONS = 2  # 最多向上扩展的次数，避免无限外推。
-KP_EXPANSION_WINDOW_RATIO = 0.05  # 每次扩展后以下一阶段最优点下方 5% 作为新的局部搜索下界。
-KP_SAFE_PHASE_LAG_RATIO = 0.8  # “相位滞后有余量”的判定比例，即需小于目标值的 80%。
-KP_SAFE_AMPLITUDE_RATIO = 0.98  # “幅值比有余量”的判定下限。
-KP_UPPER_BOUND_PROXIMITY_RATIO = 0.15  # 最优点距上边界在区间宽度的 15% 内，视为贴近上边界。
-KP_UPPER_BOUND_PROXIMITY_ABS = 0.005  # 判断贴近上边界时的绝对最小阈值。
-KP_SIGNIFICANT_IMPROVEMENT_RATIO = 0.05  # 相对 cost 改善达到 5% 视为“仍明显改善”。
-KP_SIGNIFICANT_IMPROVEMENT_ABS = 0.1  # 绝对 cost 改善达到 0.1 视为“仍明显改善”。
+DEFAULT_KP_RELATIVE_RANGE_RATIO = 0.1  # 未显式给出区间时，初始阶段默认围绕当前 Kp 做 ±10% 搜索。
+DEFAULT_KP_HARD_MAX_FACTOR = 2.5  # 自动调参时，hard_max 默认为 original_kp 的此倍数。
+DEFAULT_KP_HARD_MAX_LIMIT = 1.0  # 自动调参绝对硬上限，强制不超过 1.0。
 KP_BAYES_GRID_SIZE = 81  # 贝叶斯优化候选网格密度；一维问题下用稠密网格即可稳定选点。
-KP_BAYES_INITIAL_SAMPLE_COUNT = 5  # 每个阶段先在区间内等距采样，使 GP 有足够内部观测点产生有意义的 EI。
+KP_BAYES_INITIAL_SAMPLE_COUNT = 3  # 每个阶段先采 low/mid/high 三个种子点，避免 seed 吃掉过多预算。
 KP_BAYES_NOISE_VARIANCE = 1e-6  # 高斯过程观测噪声项，避免协方差矩阵奇异。
 KP_BAYES_JITTER = 1e-9  # 数值稳定抖动项，避免 Cholesky 分解因舍入误差失败。
-KP_BAYES_EI_TOLERANCE = 1e-6  # Expected Improvement 低于此值时，认为继续搜索价值很低。
+KP_BAYES_EI_TOLERANCE = 1e-3  # 归一化后 EI 低于此值时，认为继续搜索价值很低。
 KP_DUPLICATE_TOLERANCE = 1e-4  # 候选 Kp 若与历史点过近，则视为重复点，不再重复评估。
+DEFAULT_KP_REPEATS = 2  # 自动调参时同一 Kp 默认重复试验次数，用均值降低现场噪声影响。
+SEARCH_COST_STD_WEIGHT = 1.0  # 最终候选比较时使用 mean(search_cost) + lambda * std(search_cost) 中的 lambda。
+STABLE_TAIL_RATIO = 0.25  # 取末尾 25% 样本评估尾部振荡和抖动。
+STABLE_TAIL_STD_MAX_RAD = 1e-4  # 尾部标准差上限，超过则认为尾部仍在抖动。
+STABLE_TAIL_PEAK_TO_PEAK_MAX_RAD = 3e-4  # 尾部峰峰值上限，超过则认为尾部仍在振荡。
+STABLE_TAIL_DIFF_RMS_MAX_RAD = 1e-4  # 尾部相邻样本差分 RMS 上限，超过则认为曲线不平滑。
+SMALL_STEP_RATIO = 0.2  # 小步进测试相对主动作位移的比例。
+SMALL_STEP_MIN_RAD = 0.05  # 小步进测试的最小位移幅度。
+SMALL_STEP_MAX_RAD = 0.15  # 小步进测试的最大位移幅度。
+AUTO_TUNE_MAX_STAGES = 3  # 自动调参最多串行执行 3 个阶段：趋势搜索、局部精调、最终确认。
+AUTO_TUNE_STAGE_ITERATIONS = (4, 6, 8)  # 三阶段默认预算分配；用户指定更大迭代数时按比例放大。
+AUTO_TUNE_STAGE_HALF_WIDTHS = (0.10, 0.08, 0.03)  # 后续阶段围绕上一阶段最优点自动收窄搜索区间的半宽度。
+AUTO_TUNE_MIN_ITERATIONS = AUTO_TUNE_MAX_STAGES * KP_BAYES_INITIAL_SAMPLE_COUNT  # 若要真正完成 3 个阶段，至少要给到每阶段 low/mid/high 三个点评估预算。
 
 
 @dataclass
@@ -106,23 +119,42 @@ class TrackingMetrics:  # 保存一次跟踪试验的评价指标和总代价。
     phase_lag_deg: float  # 按等效频率换算得到的相位滞后角度。
     amplitude_ratio: float  # 输出幅值 / 输入幅值 的稳态幅值比。
     overshoot_rad: float  # 相对最终 reference 的绝对超调量。
+    tail_std_rad: float  # 末尾稳态窗口的标准差，用于判断尾部抖动。
+    tail_peak_to_peak_rad: float  # 末尾稳态窗口的峰峰值，用于判断尾部振荡。
+    tail_diff_rms_rad: float  # 末尾稳态窗口相邻样本差分 RMS，用于衡量平滑度。
     rmse_term: float  # RMSE 按目标值 0.01 度归一化后的代价值分量。
     phase_lag_term: float  # 相位滞后按目标角度归一化后的代价值分量。
     amplitude_ratio_term: float  # 幅值比相对理想值的代价值分量。
+    smoothness_term: float  # 基于尾部抖动和平滑度的代价值分量。
     rmse_penalty: float  # RMSE 超目标后的附加罚分。
     phase_lag_penalty: float  # 相位滞后超目标角度后的附加罚分。
     amplitude_ratio_penalty: float  # 幅值比低于 0.95 后的附加罚分。
     overshoot_penalty: float  # 出现超调后的硬惩罚。
-    cost: float  # 各项指标按权重折算后的总代价。
-    meets_target: bool  # 是否同时满足 RMSE 和无超调目标。
+    search_cost: float  # 搜索阶段使用的总代价，供 BO 和候选比较使用。
+    strict_ok: bool  # 是否满足最终严格验收标准。
+    expand_safe: bool  # 是否满足进入下一阶段或作为稳定回退候选的宽松安全标准。
+    stable_ok: bool  # 是否满足尾部稳定和平滑性硬门槛。
     note: str = ""  # 记录异常情况或额外说明。
 
 
 @dataclass
-class KpTrialResult:  # 保存某个 Kp 候选值的一次试验结果。
+class SingleTrialResult:  # 保存一次真实执行过的单次动作试验结果。
     kp: float  # 本次试验写入的位置环 P 参数。
     tracker: ResponseTracker  # 本次试验对应的 reference/feedback 响应曲线样本。
     metrics: TrackingMetrics  # 本次试验对应的评价指标。
+    action_label: str = "single"  # 该结果对应的测试动作标签。
+    repeat_index: int = 1  # 同一动作下的重复试验序号，从 1 开始。
+
+
+@dataclass
+class KpTrialResult:  # 保存某个 Kp 候选值的聚合摘要，并显式关联原始试验记录。
+    kp: float  # 本次试验写入的位置环 P 参数。
+    metrics: TrackingMetrics  # 该 Kp 聚合后的评价指标。
+    display_trial: SingleTrialResult  # 用于绘图和人工复盘的代表性单次试验。
+    raw_trials: list[SingleTrialResult]  # 该 Kp 下所有原始 trial，供 CSV 明细导出。
+    repeat_count: int = 1  # 该 Kp 实际重复评估次数。
+    search_cost_std: float = 0.0  # 多次重复时 search_cost 的样本标准差。
+    action_label: str = "single"  # 该结果对应的测试动作标签，聚合结果记为 multi_action。
 
 
 @dataclass
@@ -146,6 +178,8 @@ class AutoTuneResult:  # 自动调参的完整结果，替代多元组返回。
     history: list  # 所有中间候选 Kp 的试验结果列表。
     original_kp: float  # 调参前的原始 Kp。
     baseline_result: "KpTrialResult"  # 原始 Kp 的基线试验结果。
+    best_result: "KpTrialResult"  # 最终被选中的最优 Kp 聚合结果。
+    action_labels: list[str]  # 本次自动调参使用的 3 个人工输入动作标签。
     reset_position: float  # 基线试验时使用的统一起始位置。
 
 
@@ -180,6 +214,29 @@ def tail_mean(values: list[float], ratio: float = 0.2) -> float:  # 用末尾一
     return sum(tail) / len(tail)
 
 
+def tail_slice(values: list[float], ratio: float = STABLE_TAIL_RATIO) -> list[float]:  # 提取末尾稳态窗口样本，用于稳定性和平滑度分析。
+    if not values:
+        raise ValueError("cannot compute tail slice from an empty list")
+    window = max(2, math.ceil(len(values) * ratio))
+    return values[-window:]
+
+
+def sequence_std(values: list[float]) -> float:  # 计算序列标准差，供尾部抖动判定使用。
+    if len(values) < 2:
+        return 0.0
+    mean_value = sum(values) / len(values)
+    variance = sum((value - mean_value) ** 2 for value in values) / len(values)
+    return math.sqrt(max(variance, 0.0))
+
+
+def adjacent_diff_rms(values: list[float]) -> float:  # 计算相邻样本差分 RMS，供尾部平滑度判定使用。
+    if len(values) < 2:
+        return 0.0
+    diffs = [values[index + 1] - values[index] for index in range(len(values) - 1)]
+    mean_square = sum(diff * diff for diff in diffs) / len(diffs)
+    return math.sqrt(max(mean_square, 0.0))
+
+
 def first_crossing_time(
     times: list[float],
     values: list[float],
@@ -212,15 +269,21 @@ def compute_tracking_metrics(tracker: ResponseTracker) -> TrackingMetrics:  # �
             phase_lag_deg=float("inf"),
             amplitude_ratio=0.0,
             overshoot_rad=0.0,
+            tail_std_rad=float("inf"),
+            tail_peak_to_peak_rad=float("inf"),
+            tail_diff_rms_rad=float("inf"),
             rmse_term=rmse / RMSE_TARGET_RAD,
             phase_lag_term=float("inf"),
             amplitude_ratio_term=float("inf"),
+            smoothness_term=float("inf"),
             rmse_penalty=RMSE_EXCESS_PENALTY_WEIGHT * max(0.0, rmse / RMSE_TARGET_RAD - 1.0),
             phase_lag_penalty=float("inf"),
             amplitude_ratio_penalty=float("inf"),
             overshoot_penalty=0.0,
-            cost=float("inf"),
-            meets_target=False,
+            search_cost=float("inf"),
+            strict_ok=False,
+            expand_safe=False,
+            stable_ok=False,
             note="reference step too small",
         )
 
@@ -258,6 +321,11 @@ def compute_tracking_metrics(tracker: ResponseTracker) -> TrackingMetrics:  # �
         trough_feedback = min(tracker.sample_positions)
         overshoot_rad = max(0.0, final_reference - trough_feedback)
 
+    tail_positions = tail_slice(tracker.sample_positions)
+    tail_std_rad = sequence_std(tail_positions)
+    tail_peak_to_peak_rad = max(tail_positions) - min(tail_positions)
+    tail_diff_rms_rad = adjacent_diff_rms(tail_positions)
+
     rmse_term = rmse / RMSE_TARGET_RAD  # 把 RMSE 归一化到“0.01 度目标值的多少倍”。
     phase_lag_term = (
         phase_lag_deg / PHASE_LAG_TARGET_DEG
@@ -265,38 +333,64 @@ def compute_tracking_metrics(tracker: ResponseTracker) -> TrackingMetrics:  # �
         else 1_000.0
     )  # 把相位滞后归一化到 2 度目标的倍数；不可定义时直接记为极大值。
     amplitude_ratio_term = amplitude_ratio_error / (1.0 - AMPLITUDE_RATIO_MIN)  # 把幅值比偏差归一化到 0.95 下限的容忍带宽。
+    smoothness_term = (
+        tail_std_rad / STABLE_TAIL_STD_MAX_RAD
+        + tail_peak_to_peak_rad / STABLE_TAIL_PEAK_TO_PEAK_MAX_RAD
+        + tail_diff_rms_rad / STABLE_TAIL_DIFF_RMS_MAX_RAD
+    ) / 3.0
 
     base_cost = (
         RMSE_COST_WEIGHT * rmse_term
         + PHASE_LAG_COST_WEIGHT * phase_lag_term
         + AMPLITUDE_RATIO_COST_WEIGHT * amplitude_ratio_term
+        + SMOOTHNESS_COST_WEIGHT * smoothness_term
     )
     rmse_penalty = RMSE_EXCESS_PENALTY_WEIGHT * max(0.0, rmse_term - 1.0)  # RMSE 超过 0.01 度目标后，按超出比例施加大罚分。
     phase_lag_penalty = PHASE_LAG_EXCESS_PENALTY_WEIGHT * max(0.0, phase_lag_term - 1.0)  # 相位滞后超过 2 度目标后，按超出比例施加罚分。
     amplitude_ratio_penalty = AMPLITUDE_RATIO_DEFICIT_PENALTY_WEIGHT * max(0.0, (AMPLITUDE_RATIO_MIN - amplitude_ratio) / AMPLITUDE_RATIO_MIN)  # 幅值比低于 0.95 后施加罚分。
-    overshoot_penalty = OVERSHOOT_HARD_PENALTY if overshoot_rad > POSITION_EPSILON else 0.0  # 一旦出现超调，就直接让总代价大幅上升。
-    cost = base_cost + rmse_penalty + phase_lag_penalty + amplitude_ratio_penalty + overshoot_penalty
-    meets_target = (
-        rmse <= RMSE_TARGET_RAD
-        and phase_lag_deg <= PHASE_LAG_TARGET_DEG
+    overshoot_penalty = OVERSHOOT_HARD_PENALTY if overshoot_rad >= OVERSHOOT_PENALTY_THRESHOLD else 0.0
+    stable_ok = (
+        tail_std_rad <= STABLE_TAIL_STD_MAX_RAD
+        and tail_peak_to_peak_rad <= STABLE_TAIL_PEAK_TO_PEAK_MAX_RAD
+        and tail_diff_rms_rad <= STABLE_TAIL_DIFF_RMS_MAX_RAD
+    )
+    stability_penalty = 0.0 if stable_ok else UNSTABLE_PENALTY
+    search_cost = base_cost + rmse_penalty + phase_lag_penalty + amplitude_ratio_penalty + overshoot_penalty + stability_penalty
+    strict_ok = (
+        stable_ok
+        and
+        rmse <= STRICT_RMSE_MAX_RAD
+        and phase_lag_deg <= STRICT_PHASE_LAG_MAX_DEG
+        and amplitude_ratio >= STRICT_AMPLITUDE_RATIO_MIN
+        and overshoot_rad <= OVERSHOOT_STRICT_MAX_RAD
+    )  # 最终严格验收：现实可达的工程阈值。
+    expand_safe = (
+        stable_ok
+        and
+        overshoot_rad <= OVERSHOOT_EXPAND_MAX_RAD
         and amplitude_ratio >= AMPLITUDE_RATIO_MIN
-        and overshoot_rad <= POSITION_EPSILON
-    )  # 满足目标：RMSE<=0.01 度、相位滞后<=2 度、幅值比>=0.95 且无超调。
+    )  # 阶段过渡判定：允许小超调，但要求无明显过冲且幅值比达标。
 
     return TrackingMetrics(
         rmse=rmse,
         phase_lag_deg=phase_lag_deg,
         amplitude_ratio=amplitude_ratio,
         overshoot_rad=overshoot_rad,
+        tail_std_rad=tail_std_rad,
+        tail_peak_to_peak_rad=tail_peak_to_peak_rad,
+        tail_diff_rms_rad=tail_diff_rms_rad,
         rmse_term=rmse_term,
         phase_lag_term=phase_lag_term,
         amplitude_ratio_term=amplitude_ratio_term,
+        smoothness_term=smoothness_term,
         rmse_penalty=rmse_penalty,
         phase_lag_penalty=phase_lag_penalty,
         amplitude_ratio_penalty=amplitude_ratio_penalty,
         overshoot_penalty=overshoot_penalty,
-        cost=cost,
-        meets_target=meets_target,
+        search_cost=search_cost,
+        strict_ok=strict_ok,
+        expand_safe=expand_safe,
+        stable_ok=stable_ok,
     )
 
 
@@ -438,8 +532,8 @@ def _position_annotation_offsets(
 
 
 def _comparison_position_limits(
-    baseline: KpTrialResult,
-    best: KpTrialResult,
+    baseline: SingleTrialResult,
+    best: SingleTrialResult,
 ) -> tuple[tuple[float, float], tuple[float, float]]:  # 为基线和最优位置图计算统一坐标范围，保证对比呈现一致。
     time_values = baseline.tracker.sample_times + best.tracker.sample_times
     position_values = (
@@ -457,8 +551,8 @@ def _comparison_position_limits(
 
 
 def _comparison_error_limits(
-    baseline: KpTrialResult,
-    best: KpTrialResult,
+    baseline: SingleTrialResult,
+    best: SingleTrialResult,
 ) -> tuple[tuple[float, float], tuple[float, float]]:  # 为基线和最优误差图计算统一坐标范围，便于横向比较误差量级。
     time_values = baseline.tracker.sample_times + best.tracker.sample_times
     error_values = baseline.tracker.sample_errors + best.tracker.sample_errors
@@ -468,35 +562,78 @@ def _comparison_error_limits(
     )
 
 
-def default_kp_trials_csv_path() -> str:  # 生成默认的 Kp 调参记录 CSV 路径，固定存放在当前脚本目录。
-    return str(Path(__file__).with_name("kp_trials.csv"))
+def default_kp_trials_raw_csv_path() -> str:  # 生成默认的 Kp 调参原始 trial CSV 路径。
+    return str(Path(__file__).with_name("kp_trials_raw.csv"))
 
 
-def save_kp_trials_csv(
+def default_kp_trials_summary_csv_path() -> str:  # 生成默认的 Kp 调参聚合摘要 CSV 路径。
+    return str(Path(__file__).with_name("kp_trials_summary.csv"))
+
+
+def comparison_action_plot_path(base_output: str, action_label: str) -> str:  # 生成分动作对比图路径。
+    plot_base = Path(base_output)
+    return str(plot_base.with_name(f"{plot_base.stem}_comparison_{action_label}.png"))
+
+
+def preview_action_plot_path(base_output: str, action_label: str) -> str:  # 生成人工输入动作的单次预览图路径。
+    plot_base = Path(base_output)
+    return str(plot_base.with_name(f"{plot_base.stem}_{action_label}_preview.png"))
+
+
+def find_raw_trial(
+    trial: KpTrialResult,
+    action_label: str,
+    repeat_index: int,
+) -> Optional[SingleTrialResult]:  # 从某个 Kp 聚合结果中选出指定动作和重复序号的原始 trial。
+    for raw_trial in trial.raw_trials:
+        if raw_trial.action_label == action_label and raw_trial.repeat_index == repeat_index:
+            return raw_trial
+    return None
+
+
+def _trial_role(index: int, trial: KpTrialResult, best_kp: float) -> str:
+    if index == 0:
+        return "baseline"
+    return "best_candidate" if abs(trial.kp - best_kp) <= POSITION_EPSILON else "candidate"
+
+
+def save_kp_trials_csvs(
     baseline: KpTrialResult,
     history: list[KpTrialResult],
     best_kp: float,
-    output_path: str,
-) -> str:  # 将原始 Kp 与所有中间候选 Kp 的评价结果写入 CSV，便于后续筛选与分析。
-    output = Path(output_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
+    raw_output_path: str,
+    summary_output_path: str,
+) -> tuple[str, str]:  # 将原始 trial 明细与 Kp 聚合摘要分别落盘，避免混淆。
     rows = [baseline] + history
-    fieldnames = [
+    raw_output = Path(raw_output_path)
+    raw_output.parent.mkdir(parents=True, exist_ok=True)
+    summary_output = Path(summary_output_path)
+    summary_output.parent.mkdir(parents=True, exist_ok=True)
+
+    raw_fieldnames = [
         "role",
         "kp",
+        "action_label",
+        "repeat_index",
         "rmse_rad",
         "phase_lag_deg",
         "amplitude_ratio",
         "overshoot_rad",
+        "tail_std_rad",
+        "tail_peak_to_peak_rad",
+        "tail_diff_rms_rad",
         "rmse_term",
         "phase_lag_term",
         "amplitude_ratio_term",
+        "smoothness_term",
         "rmse_penalty",
         "phase_lag_penalty",
         "amplitude_ratio_penalty",
         "overshoot_penalty",
-        "cost",
-        "meets_target",
+        "search_cost",
+        "strict_ok",
+        "expand_safe",
+        "stable_ok",
         "note",
         "initial_position_rad",
         "initial_reference_position_rad",
@@ -504,45 +641,149 @@ def save_kp_trials_csv(
         "final_position_rad",
         "final_reference_position_rad",
         "sample_count",
+        "summary_action_label",
+        "summary_repeat_count",
+        "summary_search_cost_std",
     ]
-    with output.open("w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+    with raw_output.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=raw_fieldnames)
         writer.writeheader()
         for index, trial in enumerate(rows):
-            role = "baseline" if index == 0 else ("best_candidate" if abs(trial.kp - best_kp) <= POSITION_EPSILON else "candidate")
+            role = _trial_role(index, trial, best_kp)
+            for raw_trial in trial.raw_trials:
+                writer.writerow(
+                    {
+                        "role": role,
+                        "kp": f"{raw_trial.kp:.6f}",
+                        "action_label": raw_trial.action_label,
+                        "repeat_index": raw_trial.repeat_index,
+                        "rmse_rad": f"{raw_trial.metrics.rmse:.6f}",
+                        "phase_lag_deg": f"{raw_trial.metrics.phase_lag_deg:.6f}",
+                        "amplitude_ratio": f"{raw_trial.metrics.amplitude_ratio:.6f}",
+                        "overshoot_rad": f"{raw_trial.metrics.overshoot_rad:.6f}",
+                        "tail_std_rad": f"{raw_trial.metrics.tail_std_rad:.6f}",
+                        "tail_peak_to_peak_rad": f"{raw_trial.metrics.tail_peak_to_peak_rad:.6f}",
+                        "tail_diff_rms_rad": f"{raw_trial.metrics.tail_diff_rms_rad:.6f}",
+                        "rmse_term": f"{raw_trial.metrics.rmse_term:.6f}",
+                        "phase_lag_term": f"{raw_trial.metrics.phase_lag_term:.6f}",
+                        "amplitude_ratio_term": f"{raw_trial.metrics.amplitude_ratio_term:.6f}",
+                        "smoothness_term": f"{raw_trial.metrics.smoothness_term:.6f}",
+                        "rmse_penalty": f"{raw_trial.metrics.rmse_penalty:.6f}",
+                        "phase_lag_penalty": f"{raw_trial.metrics.phase_lag_penalty:.6f}",
+                        "amplitude_ratio_penalty": f"{raw_trial.metrics.amplitude_ratio_penalty:.6f}",
+                        "overshoot_penalty": f"{raw_trial.metrics.overshoot_penalty:.6f}",
+                        "search_cost": f"{raw_trial.metrics.search_cost:.6f}",
+                        "strict_ok": str(raw_trial.metrics.strict_ok),
+                        "expand_safe": str(raw_trial.metrics.expand_safe),
+                        "stable_ok": str(raw_trial.metrics.stable_ok),
+                        "note": raw_trial.metrics.note,
+                        "initial_position_rad": f"{raw_trial.tracker.initial_position:.6f}",
+                        "initial_reference_position_rad": f"{raw_trial.tracker.initial_reference_position:.6f}",
+                        "target_position_rad": f"{raw_trial.tracker.target_position:.6f}",
+                        "final_position_rad": (
+                            f"{raw_trial.tracker.last_position:.6f}" if raw_trial.tracker.last_position is not None else ""
+                        ),
+                        "final_reference_position_rad": (
+                            f"{raw_trial.tracker.last_reference_position:.6f}"
+                            if raw_trial.tracker.last_reference_position is not None
+                            else ""
+                        ),
+                        "sample_count": len(raw_trial.tracker.sample_times),
+                        "summary_action_label": trial.action_label,
+                        "summary_repeat_count": trial.repeat_count,
+                        "summary_search_cost_std": f"{trial.search_cost_std:.6f}",
+                    }
+                )
+
+    summary_fieldnames = [
+        "role",
+        "kp",
+        "action_label",
+        "rmse_rad",
+        "phase_lag_deg",
+        "amplitude_ratio",
+        "overshoot_rad",
+        "tail_std_rad",
+        "tail_peak_to_peak_rad",
+        "tail_diff_rms_rad",
+        "rmse_term",
+        "phase_lag_term",
+        "amplitude_ratio_term",
+        "smoothness_term",
+        "rmse_penalty",
+        "phase_lag_penalty",
+        "amplitude_ratio_penalty",
+        "overshoot_penalty",
+        "search_cost",
+        "search_cost_std",
+        "repeat_count",
+        "strict_ok",
+        "expand_safe",
+        "stable_ok",
+        "note",
+        "raw_trial_count",
+        "display_action_label",
+        "display_repeat_index",
+        "display_initial_position_rad",
+        "display_initial_reference_position_rad",
+        "display_target_position_rad",
+        "display_final_position_rad",
+        "display_final_reference_position_rad",
+        "display_sample_count",
+    ]
+    with summary_output.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=summary_fieldnames)
+        writer.writeheader()
+        for index, trial in enumerate(rows):
+            role = _trial_role(index, trial, best_kp)
+            display_trial = trial.display_trial
             writer.writerow(
                 {
                     "role": role,
                     "kp": f"{trial.kp:.6f}",
-                    "rmse_rad": f"{trial.metrics.rmse:.9f}",
-                    "phase_lag_deg": f"{trial.metrics.phase_lag_deg:.9f}",
-                    "amplitude_ratio": f"{trial.metrics.amplitude_ratio:.9f}",
-                    "overshoot_rad": f"{trial.metrics.overshoot_rad:.9f}",
-                    "rmse_term": f"{trial.metrics.rmse_term:.9f}",
-                    "phase_lag_term": f"{trial.metrics.phase_lag_term:.9f}",
-                    "amplitude_ratio_term": f"{trial.metrics.amplitude_ratio_term:.9f}",
-                    "rmse_penalty": f"{trial.metrics.rmse_penalty:.9f}",
-                    "phase_lag_penalty": f"{trial.metrics.phase_lag_penalty:.9f}",
-                    "amplitude_ratio_penalty": f"{trial.metrics.amplitude_ratio_penalty:.9f}",
-                    "overshoot_penalty": f"{trial.metrics.overshoot_penalty:.9f}",
-                    "cost": f"{trial.metrics.cost:.9f}",
-                    "meets_target": str(trial.metrics.meets_target),
+                    "action_label": trial.action_label,
+                    "rmse_rad": f"{trial.metrics.rmse:.6f}",
+                    "phase_lag_deg": f"{trial.metrics.phase_lag_deg:.6f}",
+                    "amplitude_ratio": f"{trial.metrics.amplitude_ratio:.6f}",
+                    "overshoot_rad": f"{trial.metrics.overshoot_rad:.6f}",
+                    "tail_std_rad": f"{trial.metrics.tail_std_rad:.6f}",
+                    "tail_peak_to_peak_rad": f"{trial.metrics.tail_peak_to_peak_rad:.6f}",
+                    "tail_diff_rms_rad": f"{trial.metrics.tail_diff_rms_rad:.6f}",
+                    "rmse_term": f"{trial.metrics.rmse_term:.6f}",
+                    "phase_lag_term": f"{trial.metrics.phase_lag_term:.6f}",
+                    "amplitude_ratio_term": f"{trial.metrics.amplitude_ratio_term:.6f}",
+                    "smoothness_term": f"{trial.metrics.smoothness_term:.6f}",
+                    "rmse_penalty": f"{trial.metrics.rmse_penalty:.6f}",
+                    "phase_lag_penalty": f"{trial.metrics.phase_lag_penalty:.6f}",
+                    "amplitude_ratio_penalty": f"{trial.metrics.amplitude_ratio_penalty:.6f}",
+                    "overshoot_penalty": f"{trial.metrics.overshoot_penalty:.6f}",
+                    "search_cost": f"{trial.metrics.search_cost:.6f}",
+                    "search_cost_std": f"{trial.search_cost_std:.6f}",
+                    "repeat_count": trial.repeat_count,
+                    "strict_ok": str(trial.metrics.strict_ok),
+                    "expand_safe": str(trial.metrics.expand_safe),
+                    "stable_ok": str(trial.metrics.stable_ok),
                     "note": trial.metrics.note,
-                    "initial_position_rad": f"{trial.tracker.initial_position:.9f}",
-                    "initial_reference_position_rad": f"{trial.tracker.initial_reference_position:.9f}",
-                    "target_position_rad": f"{trial.tracker.target_position:.9f}",
-                    "final_position_rad": (
-                        f"{trial.tracker.last_position:.9f}" if trial.tracker.last_position is not None else ""
-                    ),
-                    "final_reference_position_rad": (
-                        f"{trial.tracker.last_reference_position:.9f}"
-                        if trial.tracker.last_reference_position is not None
+                    "raw_trial_count": len(trial.raw_trials),
+                    "display_action_label": display_trial.action_label,
+                    "display_repeat_index": display_trial.repeat_index,
+                    "display_initial_position_rad": f"{display_trial.tracker.initial_position:.6f}",
+                    "display_initial_reference_position_rad": f"{display_trial.tracker.initial_reference_position:.6f}",
+                    "display_target_position_rad": f"{display_trial.tracker.target_position:.6f}",
+                    "display_final_position_rad": (
+                        f"{display_trial.tracker.last_position:.6f}"
+                        if display_trial.tracker.last_position is not None
                         else ""
                     ),
-                    "sample_count": len(trial.tracker.sample_times),
+                    "display_final_reference_position_rad": (
+                        f"{display_trial.tracker.last_reference_position:.6f}"
+                        if display_trial.tracker.last_reference_position is not None
+                        else ""
+                    ),
+                    "display_sample_count": len(display_trial.tracker.sample_times),
                 }
             )
-    return str(output)
+    return str(raw_output), str(summary_output)
 
 
 def _normal_pdf(value: float) -> float:  # 标准正态分布概率密度函数，供 EI 计算使用。
@@ -592,6 +833,16 @@ def _solve_linear_system(matrix: list[list[float]], vector: list[float]) -> list
                 augmented[row_index][column_index] -= factor * augmented[pivot_index][column_index]
 
     return [augmented[row_index][size] for row_index in range(size)]
+
+
+def normalize_costs(costs: list[float]) -> tuple[list[float], float, float]:  # 对 cost 做标准化，提升 GP/EI 的数值稳定性。
+    if not costs:
+        raise ValueError("Cannot normalize an empty cost list")
+    mean_cost = sum(costs) / len(costs)
+    variance = sum((cost - mean_cost) ** 2 for cost in costs) / len(costs)
+    std_cost = math.sqrt(max(variance, KP_BAYES_JITTER))
+    normalized = [(cost - mean_cost) / std_cost for cost in costs]
+    return normalized, mean_cost, std_cost
 
 
 def fit_gaussian_process(
@@ -664,8 +915,9 @@ def choose_next_kp_via_bayes(
         low + (high - low) * index / (KP_BAYES_GRID_SIZE - 1)
         for index in range(KP_BAYES_GRID_SIZE)
     ]
-    prediction = fit_gaussian_process(observed_kps, observed_costs, grid, low, high)
-    eis = expected_improvement(prediction, min(observed_costs))
+    normalized_costs, _, _ = normalize_costs(observed_costs)
+    prediction = fit_gaussian_process(observed_kps, normalized_costs, grid, low, high)
+    eis = expected_improvement(prediction, min(normalized_costs))
 
     ranked_indices = sorted(range(len(grid)), key=lambda index: eis[index], reverse=True)
     for index in ranked_indices:
@@ -677,36 +929,159 @@ def choose_next_kp_via_bayes(
     return midpoint, 0.0
 
 
-def is_safe_kp_trial(trial: KpTrialResult) -> bool:  # 判断某个 Kp 试验是否满足“完全达标”的严格安全条件（不再用于扩展决策）。
-    metrics = trial.metrics
-    return (
-        metrics.meets_target
-        and metrics.overshoot_rad <= POSITION_EPSILON
-        and metrics.phase_lag_deg <= PHASE_LAG_TARGET_DEG * KP_SAFE_PHASE_LAG_RATIO
-        and metrics.amplitude_ratio >= max(KP_SAFE_AMPLITUDE_RATIO, AMPLITUDE_RATIO_MIN)
+def aggregate_kp_trials(kp: float, trials: list[SingleTrialResult]) -> KpTrialResult:  # 将同一 Kp 的多次重复试验聚合成一个代表结果，便于后续统一比较。
+    if not trials:
+        raise ValueError("Cannot aggregate an empty trial list")
+    if len(trials) == 1:
+        trial = trials[0]
+        return KpTrialResult(
+            kp=kp,
+            metrics=trial.metrics,
+            display_trial=trial,
+            raw_trials=[trial],
+            repeat_count=1,
+            search_cost_std=0.0,
+            action_label=trial.action_label,
+        )
+
+    best_single = min(trials, key=lambda trial: trial.metrics.search_cost)
+    mean_search_cost = sum(trial.metrics.search_cost for trial in trials) / len(trials)
+    variance = sum((trial.metrics.search_cost - mean_search_cost) ** 2 for trial in trials) / len(trials)
+
+    aggregated_metrics = TrackingMetrics(
+        rmse=sum(trial.metrics.rmse for trial in trials) / len(trials),
+        phase_lag_deg=sum(trial.metrics.phase_lag_deg for trial in trials) / len(trials),
+        amplitude_ratio=sum(trial.metrics.amplitude_ratio for trial in trials) / len(trials),
+        overshoot_rad=sum(trial.metrics.overshoot_rad for trial in trials) / len(trials),
+        tail_std_rad=sum(trial.metrics.tail_std_rad for trial in trials) / len(trials),
+        tail_peak_to_peak_rad=sum(trial.metrics.tail_peak_to_peak_rad for trial in trials) / len(trials),
+        tail_diff_rms_rad=sum(trial.metrics.tail_diff_rms_rad for trial in trials) / len(trials),
+        rmse_term=sum(trial.metrics.rmse_term for trial in trials) / len(trials),
+        phase_lag_term=sum(trial.metrics.phase_lag_term for trial in trials) / len(trials),
+        amplitude_ratio_term=sum(trial.metrics.amplitude_ratio_term for trial in trials) / len(trials),
+        smoothness_term=sum(trial.metrics.smoothness_term for trial in trials) / len(trials),
+        rmse_penalty=sum(trial.metrics.rmse_penalty for trial in trials) / len(trials),
+        phase_lag_penalty=sum(trial.metrics.phase_lag_penalty for trial in trials) / len(trials),
+        amplitude_ratio_penalty=sum(trial.metrics.amplitude_ratio_penalty for trial in trials) / len(trials),
+        overshoot_penalty=max(trial.metrics.overshoot_penalty for trial in trials),
+        search_cost=mean_search_cost,
+        strict_ok=all(trial.metrics.strict_ok for trial in trials),
+        expand_safe=all(trial.metrics.expand_safe for trial in trials),
+        stable_ok=all(trial.metrics.stable_ok for trial in trials),
+        note="aggregated_from_repeats",
+    )
+    return KpTrialResult(
+        kp=kp,
+        metrics=aggregated_metrics,
+        display_trial=best_single,
+        raw_trials=list(trials),
+        repeat_count=len(trials),
+        search_cost_std=math.sqrt(max(variance, 0.0)),
+        action_label=best_single.action_label,
     )
 
 
-def is_expand_safe(trial: KpTrialResult) -> bool:  # 判断某个 Kp 试验是否满足“可继续向上扩展”的宽松安全条件：无超调且幅值比达标即可。
-    metrics = trial.metrics
-    return (
-        metrics.overshoot_rad <= POSITION_EPSILON
-        and metrics.amplitude_ratio >= AMPLITUDE_RATIO_MIN
+def aggregate_action_trials(kp: float, trials: list[KpTrialResult]) -> KpTrialResult:  # 将多个测试动作的聚合结果再次聚合成一个 Kp 级别的联合评价结果。
+    if not trials:
+        raise ValueError("Cannot aggregate an empty action trial list")
+    best_single = min(
+        trials,
+        key=lambda trial: trial.metrics.search_cost + SEARCH_COST_STD_WEIGHT * trial.search_cost_std,
+    )
+    display_trial = next(
+        (trial.display_trial for trial in trials if trial.action_label in ("forward", "main")),
+        best_single.display_trial,
+    )  # 绘图始终优先展示主动作响应，避免多动作评分改变图片风格。
+    mean_search_cost = sum(trial.metrics.search_cost for trial in trials) / len(trials)
+    variance = sum((trial.metrics.search_cost - mean_search_cost) ** 2 for trial in trials) / len(trials)
+
+    aggregated_metrics = TrackingMetrics(
+        rmse=sum(trial.metrics.rmse for trial in trials) / len(trials),
+        phase_lag_deg=sum(trial.metrics.phase_lag_deg for trial in trials) / len(trials),
+        amplitude_ratio=sum(trial.metrics.amplitude_ratio for trial in trials) / len(trials),
+        overshoot_rad=sum(trial.metrics.overshoot_rad for trial in trials) / len(trials),
+        tail_std_rad=sum(trial.metrics.tail_std_rad for trial in trials) / len(trials),
+        tail_peak_to_peak_rad=sum(trial.metrics.tail_peak_to_peak_rad for trial in trials) / len(trials),
+        tail_diff_rms_rad=sum(trial.metrics.tail_diff_rms_rad for trial in trials) / len(trials),
+        rmse_term=sum(trial.metrics.rmse_term for trial in trials) / len(trials),
+        phase_lag_term=sum(trial.metrics.phase_lag_term for trial in trials) / len(trials),
+        amplitude_ratio_term=sum(trial.metrics.amplitude_ratio_term for trial in trials) / len(trials),
+        smoothness_term=sum(trial.metrics.smoothness_term for trial in trials) / len(trials),
+        rmse_penalty=sum(trial.metrics.rmse_penalty for trial in trials) / len(trials),
+        phase_lag_penalty=sum(trial.metrics.phase_lag_penalty for trial in trials) / len(trials),
+        amplitude_ratio_penalty=sum(trial.metrics.amplitude_ratio_penalty for trial in trials) / len(trials),
+        overshoot_penalty=max(trial.metrics.overshoot_penalty for trial in trials),
+        search_cost=mean_search_cost,
+        strict_ok=all(trial.metrics.strict_ok for trial in trials),
+        expand_safe=all(trial.metrics.expand_safe for trial in trials),
+        stable_ok=all(trial.metrics.stable_ok for trial in trials),
+        note="aggregated_from_multi_actions",
+    )
+    return KpTrialResult(
+        kp=kp,
+        metrics=aggregated_metrics,
+        display_trial=display_trial,
+        raw_trials=[raw_trial for trial in trials for raw_trial in trial.raw_trials],
+        repeat_count=sum(trial.repeat_count for trial in trials),
+        search_cost_std=math.sqrt(max(variance, 0.0)),
+        action_label="multi_action",
     )
 
 
-def is_near_upper_bound(kp: float, low: float, high: float) -> bool:  # 判断当前最优点是否已经贴近当前搜索区间上边界。
-    threshold = max(KP_UPPER_BOUND_PROXIMITY_ABS, (high - low) * KP_UPPER_BOUND_PROXIMITY_RATIO)
-    return kp >= high - threshold
+def is_safe_kp_trial(trial: KpTrialResult) -> bool:  # 判断某个 Kp 试验是否满足“完全达标”的严格安全条件。
+    return trial.metrics.strict_ok
 
 
-def has_recent_significant_improvement(improvements: list[tuple[float, float]]) -> bool:  # 检查最近两次最佳 cost 改善是否仍然明显。
-    if len(improvements) < 2:
-        return False
-    return all(
-        absolute >= KP_SIGNIFICANT_IMPROVEMENT_ABS or relative >= KP_SIGNIFICANT_IMPROVEMENT_RATIO
-        for absolute, relative in improvements[-2:]
-    )
+def is_expand_safe(trial: KpTrialResult) -> bool:  # 判断某个 Kp 试验是否满足“可进入下一阶段或作为回退候选”的宽松安全条件。
+    return trial.metrics.expand_safe
+
+
+def allocate_stage_iteration_budgets(total_iterations: int) -> list[int]:  # 将总预算分配到 3 个自动调参阶段，保证前期粗搜、后期精调都有足够次数。
+    total_iterations = max(total_iterations, AUTO_TUNE_MIN_ITERATIONS)
+    budgets = [KP_BAYES_INITIAL_SAMPLE_COUNT] * AUTO_TUNE_MAX_STAGES
+    remaining = total_iterations - AUTO_TUNE_MIN_ITERATIONS
+    if remaining == 0:
+        return budgets
+
+    weights = list(AUTO_TUNE_STAGE_ITERATIONS)
+    weight_total = sum(weights)
+    for index in range(AUTO_TUNE_MAX_STAGES):
+        share = (remaining * weights[index]) // weight_total
+        budgets[index] += share
+    distributed = sum(budgets) - AUTO_TUNE_MIN_ITERATIONS
+    leftover = remaining - distributed
+    index = AUTO_TUNE_MAX_STAGES - 1
+    while leftover > 0:
+        budgets[index] += 1
+        leftover -= 1
+        index = (index - 1) % AUTO_TUNE_MAX_STAGES
+    return budgets
+
+
+def next_stage_bounds(center_kp: float, hard_max: float, stage_index: int) -> tuple[float, float]:  # 围绕上一阶段最优点生成下一阶段自动收窄区间。
+    half_width = AUTO_TUNE_STAGE_HALF_WIDTHS[min(stage_index, len(AUTO_TUNE_STAGE_HALF_WIDTHS) - 1)]
+    low = max(0.0, center_kp - half_width)
+    high = min(hard_max, center_kp + half_width)
+    if low >= high:
+        high = min(hard_max, center_kp + KP_INTERVAL_TOLERANCE)
+        low = max(0.0, high - 2.0 * KP_INTERVAL_TOLERANCE)
+    return low, high
+
+
+def centered_initial_kp_bounds(center_kp: float, half_width: float, hard_max: float) -> tuple[float, float]:  # 初始阶段默认围绕当前 Kp 居中取区间，若触边则尽量平移保持宽度。
+    effective_half_width = max(half_width, KP_INTERVAL_TOLERANCE)
+    low = center_kp - effective_half_width
+    high = center_kp + effective_half_width
+    if low < 0.0:
+        high = min(hard_max, high - low)
+        low = 0.0
+    if high > hard_max:
+        low = max(0.0, low - (high - hard_max))
+        high = hard_max
+    if low >= high:
+        high = min(hard_max, center_kp + KP_INTERVAL_TOLERANCE)
+        low = max(0.0, high - 2.0 * KP_INTERVAL_TOLERANCE)
+    return low, high
 
 
 def extract_position(values, index: int) -> float:  # 从 controller_state 的 positions 数组中按索引取目标关节值。
@@ -1108,8 +1483,8 @@ def save_response_plot(
 
 
 def save_comparison_plot(
-    baseline: KpTrialResult,
-    best: KpTrialResult,
+    baseline: SingleTrialResult,
+    best: SingleTrialResult,
     output_path: str,
 ) -> str:  # 生成 2x2 对比图：基线/最优 的位置曲线与误差曲线。
     try:
@@ -1273,7 +1648,7 @@ def save_comparison_plot(
             axis.set_ylim(*error_value_limits)
 
         axis.set_title(
-            f"{title}\nKp={trial.kp:.4f}, RMSE={trial.metrics.rmse:.6f}, Cost={trial.metrics.cost:.6f}"
+            f"{title}\nKp={trial.kp:.4f}, RMSE={trial.metrics.rmse:.6f}, Cost={trial.metrics.search_cost:.6f}"
         )
         axis.minorticks_on()
         axis.grid(True, which="major", linestyle="--", alpha=0.45)
@@ -1417,13 +1792,13 @@ def parse_args() -> argparse.Namespace:  # 定义并解析命令行参数。
         "--kp-range",
         type=float,
         default=None,
-        help="Absolute Kp search offset from current Kp. Default: use current_kp ±10%",
+        help=f"Absolute Kp search offset from current Kp. Default: center the initial stage around current Kp with +/-{DEFAULT_KP_RELATIVE_RANGE_RATIO * 100:.0f}% if kp-min/max are not set",
     )
     parser.add_argument(  # 添加可选参数 `--kp-hard-max`，限制自动调参时允许探索的绝对最高 Kp。
         "--kp-hard-max",
         type=float,
         default=0.0,
-        help=f"Absolute hard upper limit for Kp auto-tuning. 0 means auto-derive from original_kp * {DEFAULT_KP_HARD_MAX_FACTOR} (floor {DEFAULT_KP_HARD_MAX_FLOOR})",
+        help=f"Absolute hard upper limit for Kp auto-tuning. 0 means auto-derive from original_kp * {DEFAULT_KP_HARD_MAX_FACTOR}, then clamp to <= {DEFAULT_KP_HARD_MAX_LIMIT}",
     )
     parser.add_argument(  # 添加可选参数 `--kp-index`，用于覆盖 SDO index。
         "--kp-index",
@@ -1439,8 +1814,8 @@ def parse_args() -> argparse.Namespace:  # 定义并解析命令行参数。
     parser.add_argument(  # 添加可选参数 `--kp-iterations`，用于限制搜索轮数。
         "--kp-iterations",
         type=int,
-        default=4,
-        help="Maximum number of Kp search iterations. Default: 4",
+        default=12,
+        help="Maximum number of Kp candidate evaluations across the 3-stage auto-tuning flow. Minimum: 9. Default: 12",
     )
     return parser.parse_args()
 
@@ -1549,6 +1924,9 @@ def main() -> int:  # 主函数，返回进程退出码。
             while rclpy.ok() and time.monotonic() < deadline:  # 在超时前持续处理 controller_state 回调。
                 rclpy.spin_once(self, timeout_sec=0.1)  # 继续消费状态反馈。
 
+        def clear_response_tracking(self) -> None:  # 一次 trial 结束后立即停止向旧 tracker 追加样本。
+            self._response_tracker = None
+
         def call(self, req: MotionRequest):  # 封装一次完整的“先采状态、再发命令、再返回测量上下文”的流程。
             if not self._client.wait_for_service(timeout_sec=5.0):
                 raise RuntimeError("Service not available")
@@ -1595,42 +1973,133 @@ def main() -> int:  # 主函数，返回进程退出码。
         print(f"{header}phase_lag: {metrics.phase_lag_deg:.6f} deg")
         print(f"{header}amplitude_ratio: {metrics.amplitude_ratio:.6f}")
         print(f"{header}overshoot: {metrics.overshoot_rad:.6f} rad")
+        print(f"{header}tail_std: {metrics.tail_std_rad:.6f} rad")
+        print(f"{header}tail_peak_to_peak: {metrics.tail_peak_to_peak_rad:.6f} rad")
+        print(f"{header}tail_diff_rms: {metrics.tail_diff_rms_rad:.6f} rad")
         print(f"{header}rmse_term: {metrics.rmse_term:.6f}")
         print(f"{header}phase_lag_term: {metrics.phase_lag_term:.6f}")
         print(f"{header}amplitude_ratio_term: {metrics.amplitude_ratio_term:.6f}")
+        print(f"{header}smoothness_term: {metrics.smoothness_term:.6f}")
         print(f"{header}rmse_penalty: {metrics.rmse_penalty:.6f}")
         print(f"{header}phase_lag_penalty: {metrics.phase_lag_penalty:.6f}")
         print(f"{header}amplitude_ratio_penalty: {metrics.amplitude_ratio_penalty:.6f}")
         print(f"{header}overshoot_penalty: {metrics.overshoot_penalty:.6f}")
-        print(f"{header}cost: {metrics.cost:.6f}")
-        print(f"{header}meets_target: {metrics.meets_target}")
+        print(f"{header}search_cost: {metrics.search_cost:.6f}")
+        print(f"{header}strict_ok: {metrics.strict_ok}")
+        print(f"{header}expand_safe: {metrics.expand_safe}")
+        print(f"{header}stable_ok: {metrics.stable_ok}")
         if metrics.note:
             print(f"{header}note: {metrics.note}")
 
+    def print_trial_summary(trial: KpTrialResult, prefix: str = "") -> None:  # 补充打印重复试验的聚合信息，便于现场判断该 Kp 是否稳定。
+        header = f"{prefix}" if prefix else ""
+        print(f"{header}repeat_count: {trial.repeat_count}")
+        print(f"{header}search_cost_std: {trial.search_cost_std:.6f}")
+
     def run_single_motion_trial(req: MotionRequest) -> tuple[str, object, float, ResponseTracker, TrackingMetrics]:  # 执行一次运动并返回完整测量结果。
-        command, response, initial_position, tracker = node.call(req)
-        metrics = finalize_trial(tracker, response, req.observe_window)
-        return command, response, initial_position, tracker, metrics
+        try:
+            command, response, initial_position, tracker = node.call(req)
+            metrics = finalize_trial(tracker, response, req.observe_window)
+            return command, response, initial_position, tracker, metrics
+        finally:
+            node.clear_response_tracking()
 
     def move_joint_to(position: float, base_req: MotionRequest) -> None:  # 用当前脚本同一路径把关节移动到指定位置，便于候选试验前回到统一起点。
         reset_req = replace(base_req, position=position)
         _, _, _, _, _ = run_single_motion_trial(reset_req)
 
-    def evaluate_kp_candidate(kp: float, reset_position: float, req: MotionRequest) -> KpTrialResult:  # 对某个候选 Kp 执行一次闭环试验，并计算总代价。
-        move_joint_to(reset_position, req)
-        write_kp(args.kp_alias, args.kp_index, args.kp_subindex, kp)
-        _, _, _, tracker, metrics = run_single_motion_trial(req)
-        return KpTrialResult(kp=kp, tracker=tracker, metrics=metrics)
+    def prompt_manual_action_requests(
+        base_req: MotionRequest,
+        reset_position: float,
+        kp: float,
+    ) -> tuple[list[tuple[str, float, MotionRequest]], dict[str, list[SingleTrialResult]]]:  # 依次提示用户输入 3 个动作角度，并立即运行一次生成预览图。
+        action_specs: list[tuple[str, float, MotionRequest]] = []
+        seeded_trials: dict[str, list[SingleTrialResult]] = {}
+        preview_base_output = args.plot_output or default_plot_path(base_req.position)
+        for index in range(3):
+            action_label = f"input_{index + 1}"
+            while True:
+                raw_value = input(f"{action_label} target position (rad): ").strip()
+                try:
+                    action_position = float(raw_value)
+                except ValueError:
+                    print(f"{action_label}: invalid float value {raw_value!r}, please re-enter")
+                    continue
+                break
+
+            action_req = replace(base_req, position=action_position)
+            action_specs.append((action_label, reset_position, action_req))
+
+            move_joint_to(reset_position, base_req)
+            write_kp(args.kp_alias, args.kp_index, args.kp_subindex, kp)
+            _, _, _, tracker, metrics = run_single_motion_trial(action_req)
+            preview_trial = SingleTrialResult(
+                kp=kp,
+                tracker=tracker,
+                metrics=metrics,
+                action_label=action_label,
+                repeat_index=1,
+            )
+            seeded_trials[action_label] = [preview_trial]
+            print_metrics(metrics, prefix=f"{action_label} preview ")
+
+            if not args.no_plot and tracker.command_time is not None:
+                preview_output = preview_action_plot_path(preview_base_output, action_label)
+                try:
+                    preview_path = save_response_plot(tracker, preview_output, metrics.rmse)
+                    print(f"{action_label} preview_plot: {preview_path}")
+                except Exception as exc:
+                    print(f"{action_label} preview_plot: unavailable ({exc})")
+
+        return action_specs, seeded_trials
+
+    def evaluate_kp_candidate(
+        kp: float,
+        action_specs: list[tuple[str, float, MotionRequest]],
+        seeded_trials_by_action: Optional[dict[str, list[SingleTrialResult]]] = None,
+    ) -> KpTrialResult:  # 对某个候选 Kp 执行一组人工输入动作的闭环试验，并计算总代价。
+        action_trials: list[KpTrialResult] = []
+        for action_label, action_start, action_req in action_specs:
+            repeated_trials = list((seeded_trials_by_action or {}).get(action_label, []))
+            for repeat_index in range(len(repeated_trials), DEFAULT_KP_REPEATS):
+                move_joint_to(action_start, action_req)
+                write_kp(args.kp_alias, args.kp_index, args.kp_subindex, kp)
+                _, _, _, tracker, metrics = run_single_motion_trial(action_req)
+                repeated_trials.append(
+                    SingleTrialResult(
+                        kp=kp,
+                        tracker=tracker,
+                        metrics=metrics,
+                        action_label=action_label,
+                        repeat_index=repeat_index + 1,
+                    )
+                )
+                if DEFAULT_KP_REPEATS > 1:
+                    print(
+                        f"kp_repeat[{repeat_index + 1}/{DEFAULT_KP_REPEATS}]: kp={kp:.6f} action={action_label} search_cost={metrics.search_cost:.6f}"
+                    )
+            action_trial = aggregate_kp_trials(kp, repeated_trials)
+            action_trial.action_label = action_label
+            action_trials.append(action_trial)
+        return aggregate_action_trials(kp, action_trials)
 
     def auto_tune_kp(req: MotionRequest) -> AutoTuneResult:  # 在给定区间内自动搜索一个代价更低的位置环 Kp。
-        if args.kp_iterations < 1:
-            raise RuntimeError("--kp-iterations must be at least 1")
+        nonlocal kp_restore_value
+        if args.kp_iterations < AUTO_TUNE_MIN_ITERATIONS:
+            raise RuntimeError(
+                f"--kp-iterations must be at least {AUTO_TUNE_MIN_ITERATIONS} to complete the 3-stage auto-tuning flow"
+            )
 
         original_kp = read_kp(args.kp_alias, args.kp_index, args.kp_subindex)
+        kp_restore_value = original_kp
         hard_max = args.kp_hard_max
         if hard_max <= 0.0:
-            hard_max = max(original_kp * DEFAULT_KP_HARD_MAX_FACTOR, DEFAULT_KP_HARD_MAX_FLOOR)
-            print(f"kp_hard_max not specified, auto-derived: {hard_max:.6f} (original_kp * {DEFAULT_KP_HARD_MAX_FACTOR}, floor {DEFAULT_KP_HARD_MAX_FLOOR})")
+            hard_max = min(original_kp * DEFAULT_KP_HARD_MAX_FACTOR, DEFAULT_KP_HARD_MAX_LIMIT)
+            print(
+                f"kp_hard_max not specified, auto-derived: {hard_max:.6f} "
+                f"(original_kp * {DEFAULT_KP_HARD_MAX_FACTOR}, clamped to <= {DEFAULT_KP_HARD_MAX_LIMIT})"
+            )
+        hard_max = min(hard_max, DEFAULT_KP_HARD_MAX_LIMIT)
         if original_kp > hard_max:
             raise RuntimeError(
                 f"Current Kp {original_kp:.6f} exceeds the configured hard max {hard_max:.6f}"
@@ -1641,98 +2110,114 @@ def main() -> int:  # 主函数，返回进程退出码。
         elif args.kp_range is not None:
             low = max(0.0, original_kp - args.kp_range)
         else:
-            low = max(0.0, original_kp * (1.0 - DEFAULT_KP_RELATIVE_RANGE_RATIO))
+            default_half_width = max(abs(original_kp) * DEFAULT_KP_RELATIVE_RANGE_RATIO, KP_INTERVAL_TOLERANCE)
+            low, _ = centered_initial_kp_bounds(original_kp, default_half_width, hard_max)
 
         if args.kp_max is not None:
             high = min(args.kp_max, hard_max)
         elif args.kp_range is not None:
             high = min(original_kp + args.kp_range, hard_max)
         else:
-            high = min(original_kp * (1.0 + DEFAULT_KP_RELATIVE_RANGE_RATIO), hard_max)
+            default_half_width = max(abs(original_kp) * DEFAULT_KP_RELATIVE_RANGE_RATIO, KP_INTERVAL_TOLERANCE)
+            _, high = centered_initial_kp_bounds(original_kp, default_half_width, hard_max)
 
         if low >= high:
             raise RuntimeError(f"Kp search interval is empty or inverted after hard-max clamp: [{low:.6f}, {high:.6f}]")
         print(
             f"kp_original: {original_kp:.6f}, search_interval: [{low:.6f}, {high:.6f}], hard_max: {hard_max:.6f}"
-        )
+            )
         _, reset_position = node.wait_for_controller_state(req.state_timeout)
-        baseline_result = evaluate_kp_candidate(original_kp, reset_position, req)
+        action_specs, baseline_seeded_trials = prompt_manual_action_requests(req, reset_position, original_kp)
+        baseline_result = evaluate_kp_candidate(original_kp, action_specs, baseline_seeded_trials)
         print_metrics(baseline_result.metrics, prefix=f"kp={original_kp:.6f} ")
+        print_trial_summary(baseline_result, prefix=f"kp={original_kp:.6f} ")
 
         history: list[KpTrialResult] = []
-        best: Optional[KpTrialResult] = baseline_result
-        best_safe: Optional[KpTrialResult] = baseline_result if is_safe_kp_trial(baseline_result) else None
+        best_search: Optional[KpTrialResult] = baseline_result
+        best_strict: Optional[KpTrialResult] = baseline_result if is_safe_kp_trial(baseline_result) else None
+        best_expandable: Optional[KpTrialResult] = baseline_result if is_expand_safe(baseline_result) else None
         evaluated_trials: dict[int, KpTrialResult] = {}
         evaluated_trials[round(original_kp, 6)] = baseline_result
-        best_improvements: list[tuple[float, float]] = []
-        expansion_count = 0
 
-        try:
-            def register_trial(trial: KpTrialResult) -> None:
-                nonlocal best, best_safe
-                trial_key = round(trial.kp, 6)
-                history.append(trial)
-                evaluated_trials[trial_key] = trial
-                if best is None or trial.metrics.cost < best.metrics.cost:
-                    best = trial
-                if is_safe_kp_trial(trial) and (best_safe is None or trial.metrics.cost < best_safe.metrics.cost):
-                    previous_best_cost = best_safe.metrics.cost if best_safe is not None else None
-                    best_safe = trial
-                    if previous_best_cost is not None:
-                        improvement_abs = previous_best_cost - trial.metrics.cost
-                        improvement_rel = improvement_abs / max(abs(previous_best_cost), KP_BAYES_JITTER)
-                        best_improvements.append((improvement_abs, improvement_rel))
+        def register_trial(trial: KpTrialResult) -> None:
+            nonlocal best_search, best_strict, best_expandable
+            trial_key = round(trial.kp, 6)
+            history.append(trial)
+            evaluated_trials[trial_key] = trial
+            if best_search is None or trial.metrics.search_cost < best_search.metrics.search_cost:
+                best_search = trial
+            if is_safe_kp_trial(trial) and (best_strict is None or trial.metrics.search_cost < best_strict.metrics.search_cost):
+                best_strict = trial
+            if is_expand_safe(trial) and (
+                best_expandable is None
+                or trial.kp > best_expandable.kp + KP_DUPLICATE_TOLERANCE
+                or trial.metrics.search_cost < best_expandable.metrics.search_cost
+            ):
+                best_expandable = trial
 
-            while len(history) < args.kp_iterations:
-                stage_label = f"expand#{expansion_count}" if expansion_count > 0 else "initial"
-                stage_seed_candidates = (
-                    [low, high]
-                    if KP_BAYES_INITIAL_SAMPLE_COUNT == 2
-                    else [
-                        low + (high - low) * index / max(1, KP_BAYES_INITIAL_SAMPLE_COUNT - 1)
+        stage_budgets = allocate_stage_iteration_budgets(args.kp_iterations)
+        print(f"kp_stage_budgets: {stage_budgets}")
+        current_stage_low = low
+        current_stage_high = high
+        history_start_index = 0
+        stage_transition_count = 0
+
+        for stage_index in range(AUTO_TUNE_MAX_STAGES):
+            stage_budget = stage_budgets[min(stage_index, len(stage_budgets) - 1)]
+            stage_history_limit = min(args.kp_iterations, history_start_index + stage_budget)
+            stage_label = f"stage#{stage_index + 1}"
+
+            while len(history) < stage_history_limit:
+                midpoint = current_stage_low + (current_stage_high - current_stage_low) / 2.0
+                stage_seed_candidates = [current_stage_low, midpoint, current_stage_high]
+                if KP_BAYES_INITIAL_SAMPLE_COUNT > 3:
+                    stage_seed_candidates.extend(
+                        current_stage_low + (current_stage_high - current_stage_low) * index / max(1, KP_BAYES_INITIAL_SAMPLE_COUNT - 1)
                         for index in range(KP_BAYES_INITIAL_SAMPLE_COUNT)
-                    ]
-                )
+                    )
+                stage_seed_candidates = sorted(set(round(candidate, 6) for candidate in stage_seed_candidates))
                 stage_progress = False
                 for seed_kp in stage_seed_candidates:
-                    if len(history) >= args.kp_iterations:
+                    if len(history) >= stage_history_limit:
                         break
+                    seed_kp = float(seed_kp)
                     seed_key = round(seed_kp, 6)
                     if seed_key in evaluated_trials:
                         continue
                     print(
-                        f"kp_search[{len(history) + 1}/{args.kp_iterations}]: {stage_label} seed kp={seed_kp:.6f}, interval=({low:.6f}, {high:.6f})"
+                        f"kp_search[{len(history) + 1}/{args.kp_iterations}]: {stage_label} seed kp={seed_kp:.6f}, interval=({current_stage_low:.6f}, {current_stage_high:.6f})"
                     )
-                    seed_result = evaluate_kp_candidate(seed_kp, reset_position, req)
+                    seed_result = evaluate_kp_candidate(seed_kp, action_specs)
                     print_metrics(seed_result.metrics, prefix=f"kp={seed_kp:.6f} ")
+                    print_trial_summary(seed_result, prefix=f"kp={seed_kp:.6f} ")
                     register_trial(seed_result)
                     stage_progress = True
 
-                while len(history) < args.kp_iterations:
-                    if high - low < KP_INTERVAL_TOLERANCE:
+                while len(history) < stage_history_limit:
+                    if current_stage_high - current_stage_low < KP_INTERVAL_TOLERANCE:
                         print(
-                            f"kp_search[{len(history) + 1}/{args.kp_iterations}]: {stage_label} interval converged ({low:.6f}, {high:.6f})"
+                            f"kp_search[{len(history) + 1}/{args.kp_iterations}]: {stage_label} interval converged ({current_stage_low:.6f}, {current_stage_high:.6f})"
                         )
                         break
 
                     observed_trials = sorted(
                         (
                             trial for trial in evaluated_trials.values()
-                            if low - KP_DUPLICATE_TOLERANCE <= trial.kp <= high + KP_DUPLICATE_TOLERANCE
+                            if current_stage_low - KP_DUPLICATE_TOLERANCE <= trial.kp <= current_stage_high + KP_DUPLICATE_TOLERANCE
                         ),
                         key=lambda trial: trial.kp,
                     )
                     if len(observed_trials) < 2:
                         break
                     observed_kps = [trial.kp for trial in observed_trials]
-                    observed_costs = [trial.metrics.cost for trial in observed_trials]
-                    candidate_kp, candidate_ei = choose_next_kp_via_bayes(observed_kps, observed_costs, low, high)
+                    observed_costs = [trial.metrics.search_cost for trial in observed_trials]
+                    candidate_kp, candidate_ei = choose_next_kp_via_bayes(observed_kps, observed_costs, current_stage_low, current_stage_high)
                     candidate_key = round(candidate_kp, 6)
                     print(
-                        f"kp_search[{len(history) + 1}/{args.kp_iterations}]: {stage_label} bayes kp={candidate_kp:.6f}, ei={candidate_ei:.6f}, interval=({low:.6f}, {high:.6f})"
+                        f"kp_search[{len(history) + 1}/{args.kp_iterations}]: {stage_label} bayes kp={candidate_kp:.6f}, ei={candidate_ei:.6f}, interval=({current_stage_low:.6f}, {current_stage_high:.6f})"
                     )
 
-                    if candidate_ei < KP_BAYES_EI_TOLERANCE and len(history) >= KP_MIN_ITERATIONS:
+                    if candidate_ei < KP_BAYES_EI_TOLERANCE and len(history) >= history_start_index + KP_MIN_ITERATIONS:
                         print(
                             f"kp_search[{len(history) + 1}/{args.kp_iterations}]: {stage_label} expected improvement too small, stop stage"
                         )
@@ -1744,70 +2229,83 @@ def main() -> int:  # 主函数，返回进程退出码。
                         )
                         break
 
-                    candidate_result = evaluate_kp_candidate(candidate_kp, reset_position, req)
+                    candidate_result = evaluate_kp_candidate(candidate_kp, action_specs)
                     print_metrics(candidate_result.metrics, prefix=f"kp={candidate_kp:.6f} ")
+                    print_trial_summary(candidate_result, prefix=f"kp={candidate_kp:.6f} ")
                     register_trial(candidate_result)
                     stage_progress = True
 
-
-                active_best = best_safe if best_safe is not None else best
-                if active_best is None:
-                    break
-                if len(history) >= args.kp_iterations:
-                    break
                 if not stage_progress:
                     print(
-                        f"kp_search[{len(history) + 1}/{args.kp_iterations}]: {stage_label} no new candidate, stop search"
+                        f"kp_search[{len(history) + 1}/{args.kp_iterations}]: {stage_label} no new candidate, stop stage"
                     )
                     break
-                if expansion_count >= KP_MAX_EXPANSIONS:
+                if len(history) >= stage_history_limit:
                     break
-                if best_safe is None:
-                    break
-                if not is_near_upper_bound(best_safe.kp, low, high):
-                    break
-                if not has_recent_significant_improvement(best_improvements):
-                    break
-                if not is_expand_safe(best_safe):
-                    break
-                if high >= hard_max - KP_DUPLICATE_TOLERANCE:
-                    break
+                break
 
-                new_high = min(hard_max, high * KP_EXPANSION_FACTOR)
-                new_low = max(0.0, best_safe.kp * (1.0 - KP_EXPANSION_WINDOW_RATIO))
-                if new_high <= high + KP_DUPLICATE_TOLERANCE or new_low >= new_high:
-                    break
-                expansion_count += 1
-                print(
-                    f"kp_search_expand[{expansion_count}/{KP_MAX_EXPANSIONS}]: safe best kp={best_safe.kp:.6f}, interval=({low:.6f}, {high:.6f}) -> ({new_low:.6f}, {new_high:.6f})"
+            transition_candidate = best_search if best_search is not None and best_search.metrics.stable_ok else best_expandable
+            active_best = transition_candidate if transition_candidate is not None else best_search
+            if active_best is not None:
+                best_expandable_text = (
+                    f"{best_expandable.kp:.6f}" if best_expandable is not None else "none"
                 )
-                low, high = new_low, new_high
+                transition_text = (
+                    f"{transition_candidate.kp:.6f}" if transition_candidate is not None else "none"
+                )
+                print(
+                    f"kp_stage_summary[{stage_label}]: best_search={best_search.kp:.6f} "
+                    f"best_expandable={best_expandable_text} "
+                    f"transition_candidate={transition_text}"
+                )
+            if active_best is None:
+                break
+            if stage_index >= AUTO_TUNE_MAX_STAGES - 1:
+                break
+            if len(history) >= args.kp_iterations:
+                break
+            if transition_candidate is None:
+                break
+            if not transition_candidate.metrics.stable_ok:
+                break
 
-            if best is None:
-                raise RuntimeError("Kp auto-tuning produced no valid trials")
-
-            selected_best = best_safe if best_safe is not None else best
-            write_kp(args.kp_alias, args.kp_index, args.kp_subindex, selected_best.kp)
-            print(f"kp_best: {selected_best.kp:.6f}")
-            return AutoTuneResult(
-                best_kp=selected_best.kp,
-                history=history,
-                original_kp=original_kp,
-                baseline_result=baseline_result,
-                reset_position=reset_position,
+            current_stage_low, current_stage_high = next_stage_bounds(transition_candidate.kp, hard_max, stage_index + 1)
+            history_start_index = len(history)
+            stage_transition_count += 1
+            print(
+                f"kp_stage_transition[{stage_transition_count}/{AUTO_TUNE_MAX_STAGES - 1}]: center kp={transition_candidate.kp:.6f} -> ({current_stage_low:.6f}, {current_stage_high:.6f})"
             )
-        except Exception:
-            write_kp(args.kp_alias, args.kp_index, args.kp_subindex, original_kp)
-            raise
+
+        if best_search is None:
+            raise RuntimeError("Kp auto-tuning produced no valid trials")
+
+        selected_best = best_strict if best_strict is not None else best_search
+        write_kp(args.kp_alias, args.kp_index, args.kp_subindex, selected_best.kp)
+        print(f"kp_best: {selected_best.kp:.6f}")
+        return AutoTuneResult(
+            best_kp=selected_best.kp,
+            history=history,
+            original_kp=original_kp,
+            baseline_result=baseline_result,
+            best_result=selected_best,
+            action_labels=[action_label for action_label, _, _ in action_specs],
+            reset_position=reset_position,
+        )
 
     rclpy.init()
     node = ExecuteCommandClient(args.service, args.state_topic)
+    kp_restore_value: Optional[float] = None
+    return_code = 1
     try:
         original_kp: Optional[float] = None
         history: list[KpTrialResult] = []
         baseline_result: Optional[KpTrialResult] = None
+        best_result: Optional[KpTrialResult] = None
+        action_labels: list[str] = []
         reset_position: Optional[float] = None
-        kp_trials_csv_path: Optional[str] = None
+        kp_trials_raw_csv_path: Optional[str] = None
+        kp_trials_summary_csv_path: Optional[str] = None
+        best_kp: Optional[float] = None
         should_save_single_plot = not args.no_plot
         base_req = MotionRequest(
             position=args.position,
@@ -1829,82 +2327,88 @@ def main() -> int:  # 主函数，返回进程退出码。
             history = result.history
             original_kp = result.original_kp
             baseline_result = result.baseline_result
+            best_result = result.best_result
+            action_labels = result.action_labels
             reset_position = result.reset_position
             print(f"kp_selected: {best_kp:.6f}")
-            kp_trials_csv_path = save_kp_trials_csv(
+            kp_trials_raw_csv_path, kp_trials_summary_csv_path = save_kp_trials_csvs(
                 baseline_result,
                 history,
                 best_kp,
-                default_kp_trials_csv_path(),
+                default_kp_trials_raw_csv_path(),
+                default_kp_trials_summary_csv_path(),
             )
             should_save_single_plot = False
-            move_joint_to(reset_position, base_req)
-
-        command, response, initial_position, tracker, metrics = run_single_motion_trial(base_req)
+        else:
+            command, response, initial_position, tracker, metrics = run_single_motion_trial(base_req)
     except Exception as exc:
         print(f"Failed to move {JOINT_NAME}: {exc}", file=sys.stderr)
-        node.destroy_node()
-        rclpy.shutdown()
-        return 1
+    else:
+        if args.auto_tune_kp:
+            print(f"kp_best: {best_kp:.6f}")
+            print_metrics(best_result.metrics, prefix="kp_selected ")
+            print_trial_summary(best_result, prefix="kp_selected ")
+            print(f"kp_trials: {len(history)}")
+            if kp_trials_raw_csv_path is not None:
+                print(f"kp_trials_raw_csv: {kp_trials_raw_csv_path}")
+            if kp_trials_summary_csv_path is not None:
+                print(f"kp_trials_summary_csv: {kp_trials_summary_csv_path}")
+            if baseline_result is not None and best_result is not None and not args.no_plot:
+                plot_base_path = Path(args.plot_output or default_plot_path(base_req.position))
+                for action_label in action_labels:
+                    baseline_plot_trial = find_raw_trial(baseline_result, action_label, repeat_index=2)
+                    best_plot_trial = find_raw_trial(best_result, action_label, repeat_index=2)
+                    comparison_output = comparison_action_plot_path(str(plot_base_path), action_label)
+                    if baseline_plot_trial is None or best_plot_trial is None:
+                        print(
+                            f"comparison_plot[{action_label}]: unavailable (missing repeat#2 raw trial)"
+                        )
+                        continue
+                    try:
+                        comparison_path = save_comparison_plot(
+                            baseline_plot_trial,
+                            best_plot_trial,
+                            str(comparison_output),
+                        )
+                        print(f"comparison_plot[{action_label}]: {comparison_path}")
+                    except Exception as exc:
+                        print(f"comparison_plot[{action_label}]: unavailable ({exc})")
+            return_code = 0
+        else:
+            print(f"command: {command}")  # 打印实际下发的命令字符串，便于排查问题。
+            print(f"accepted: {response.accepted}")  # 打印服务端是否受理了这条命令。
+            print(f"success: {response.success}")  # 打印服务端报告的整体成功状态。
+            print(f"command_id: {response.command_id}")  # 打印命令 ID，便于关联日志。
+            print(f"message: {response.message}")  # 打印服务端返回的说明信息。
+            print(f"initial_position: {initial_position}")  # 打印发命令前读取到的关节初始角度。
+            print(f"target_position: {base_req.position}")
+            print(f"delta_position: {tracker.target_position - tracker.initial_position}")  # 打印本次动作总位移，便于结合响应指标分析。
 
-    print(f"command: {command}")  # 打印实际下发的命令字符串，便于排查问题。
-    print(f"accepted: {response.accepted}")  # 打印服务端是否受理了这条命令。
-    print(f"success: {response.success}")  # 打印服务端报告的整体成功状态。
-    print(f"command_id: {response.command_id}")  # 打印命令 ID，便于关联日志。
-    print(f"message: {response.message}")  # 打印服务端返回的说明信息。
-    print(f"initial_position: {initial_position}")  # 打印发命令前读取到的关节初始角度。
-    print(f"target_position: {base_req.position}")
-    print(f"delta_position: {tracker.target_position - tracker.initial_position}")  # 打印本次动作总位移，便于结合响应指标分析。
+            if response.result_received:  # 如果本次请求要求等待结果，并且确实收到了结果。
+                print(f"moveit_code: {response.result.moveit_code}")  # 打印 MoveIt 返回码。
+                print(f"executed: {response.result.executed}")  # 打印是否真的执行了，而不只是规划。
+                print(f"result_message: {response.result.message}")  # 打印更详细的执行结果描述。
 
-    if response.result_received:  # 如果本次请求要求等待结果，并且确实收到了结果。
-        print(f"moveit_code: {response.result.moveit_code}")  # 打印 MoveIt 返回码。
-        print(f"executed: {response.result.executed}")  # 打印是否真的执行了，而不只是规划。
-        print(f"result_message: {response.result.message}")  # 打印更详细的执行结果描述。
+            print_metrics(metrics)  # 打印最终试验的综合跟踪指标。
 
-    print_metrics(metrics)  # 打印最终试验的综合跟踪指标。
-    if args.auto_tune_kp:
-        print(f"kp_target_satisfied: {metrics.meets_target}")
-        print(f"kp_trials: {len(history)}")
-        if kp_trials_csv_path is not None:
-            print(f"kp_trials_csv: {kp_trials_csv_path}")
-
-    if should_save_single_plot and tracker.command_time is not None:
-        plot_output = args.plot_output or default_plot_path(base_req.position)
-        try:
-            actual_plot_path = save_response_plot(tracker, plot_output, metrics.rmse)
-            print(f"response_plot: {actual_plot_path}")  # 打印图像路径，便于用户直接打开查看。
-        except Exception as exc:
-            print(f"response_plot: unavailable ({exc})")  # 绘图失败时不影响主流程，只输出原因。
-
-    if args.auto_tune_kp and baseline_result is not None and not args.no_plot:
-        plot_base_path = Path(args.plot_output or default_plot_path(base_req.position))
-        comparison_output = plot_base_path.with_name(
-            f"{plot_base_path.stem}_comparison.png"
-        )
-        try:
-            comparison_path = save_comparison_plot(
-                baseline_result,
-                KpTrialResult(
-                    kp=best_kp,
-                    tracker=tracker,
-                    metrics=metrics,
-                ),
-                str(comparison_output),
-            )
-            print(f"comparison_plot: {comparison_path}")
-        except Exception as exc:
-            print(f"comparison_plot: unavailable ({exc})")
-
-    if args.auto_tune_kp and original_kp is not None:  # 自动调参模式下，最终仍恢复原始 Kp，避免脚本隐式改变现场参数。
-        try:
-            write_kp(args.kp_alias, args.kp_index, args.kp_subindex, original_kp)
-            print(f"kp_restored: {original_kp:.6f}")
-        except Exception as exc:
-            print(f"kp_restore_failed: {exc}", file=sys.stderr)
-
-    node.destroy_node()  # 正常结束前销毁 ROS 2 节点。
-    rclpy.shutdown()  # 关闭 ROS 2 Python 运行时。
-    return 0 if response.success else 2  # 成功返回 0；服务有响应但执行失败时返回 2。
+            if should_save_single_plot and tracker.command_time is not None:
+                plot_output = args.plot_output or default_plot_path(base_req.position)
+                try:
+                    actual_plot_path = save_response_plot(tracker, plot_output, metrics.rmse)
+                    print(f"response_plot: {actual_plot_path}")  # 打印图像路径，便于用户直接打开查看。
+                except Exception as exc:
+                    print(f"response_plot: unavailable ({exc})")  # 绘图失败时不影响主流程，只输出原因。
+            return_code = 0 if response.success else 2  # 成功返回 0；服务有响应但执行失败时返回 2。
+    finally:
+        if args.auto_tune_kp and kp_restore_value is not None:  # 自动调参路径无论成功、失败还是绘图异常，最终都恢复原始 Kp。
+            try:
+                write_kp(args.kp_alias, args.kp_index, args.kp_subindex, kp_restore_value)
+                print(f"kp_restored: {kp_restore_value:.6f}")
+            except Exception as exc:
+                print(f"kp_restore_failed: {exc}", file=sys.stderr)
+        node.destroy_node()  # 正常结束前销毁 ROS 2 节点。
+        rclpy.shutdown()  # 关闭 ROS 2 Python 运行时。
+    return return_code
 
 
 if __name__ == "__main__":  # 只有直接运行本文件时才进入这里；被 import 时不会自动执行。
