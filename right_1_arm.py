@@ -450,6 +450,10 @@ def default_plot_path(target_position: float) -> str:  # 生成默认响应曲�
     return str(Path(__file__).with_name(f"right_arm_1_joint_response_{safe_target}.png"))
 
 
+def default_auto_tune_plot_path() -> str:  # 自动调参模式的默认图片基名，不再依赖命令行 position。
+    return str(Path(__file__).with_name(f"{JOINT_NAME}_auto_tune.png"))
+
+
 def _expand_range(min_value: float, max_value: float) -> tuple[float, float]:  # 为绘图坐标轴补一点边距，避免曲线贴边。
     if min_value == max_value:
         padding = 1.0 if abs(min_value) < 1.0 else abs(min_value) * 0.1
@@ -988,10 +992,7 @@ def aggregate_action_trials(kp: float, trials: list[KpTrialResult]) -> KpTrialRe
         trials,
         key=lambda trial: trial.metrics.search_cost + SEARCH_COST_STD_WEIGHT * trial.search_cost_std,
     )
-    display_trial = next(
-        (trial.display_trial for trial in trials if trial.action_label in ("forward", "main")),
-        best_single.display_trial,
-    )  # 绘图始终优先展示主动作响应，避免多动作评分改变图片风格。
+    display_trial = best_single.display_trial  # 当前动作均为人工输入标签，直接展示综合评分最优的代表试验。
     mean_search_cost = sum(trial.metrics.search_cost for trial in trials) / len(trials)
     variance = sum((trial.metrics.search_cost - mean_search_cost) ** 2 for trial in trials) / len(trials)
 
@@ -1686,8 +1687,9 @@ def parse_args() -> argparse.Namespace:  # 定义并解析命令行参数。
     )
     parser.add_argument(  # 添加位置参数 `position`。
         "position",
+        nargs="?",
         type=float,
-        help="Target joint position for right_arm_1_joint, in radians.",
+        help="Target joint position for right_arm_1_joint, in radians. Required for single-motion mode; ignored by auto-tune mode.",
     )
     parser.add_argument(  # 添加可选参数 `--service`。
         "--service",
@@ -1822,6 +1824,9 @@ def parse_args() -> argparse.Namespace:  # 定义并解析命令行参数。
 
 def main() -> int:  # 主函数，返回进程退出码。
     args = parse_args()
+    if not args.auto_tune_kp and args.position is None:
+        print("position is required unless --auto-tune-kp is used", file=sys.stderr)
+        return 2
 
     try:  # 尝试导入 ROS 2 运行和关节反馈测量所需的模块。
         import rclpy  # ROS 2 Python 客户端库。
@@ -2015,7 +2020,7 @@ def main() -> int:  # 主函数，返回进程退出码。
     ) -> tuple[list[tuple[str, float, MotionRequest]], dict[str, list[SingleTrialResult]]]:  # 依次提示用户输入 3 个动作角度，并立即运行一次生成预览图。
         action_specs: list[tuple[str, float, MotionRequest]] = []
         seeded_trials: dict[str, list[SingleTrialResult]] = {}
-        preview_base_output = args.plot_output or default_plot_path(base_req.position)
+        preview_base_output = args.plot_output or default_auto_tune_plot_path()
         for index in range(3):
             action_label = f"input_{index + 1}"
             while True:
@@ -2308,7 +2313,7 @@ def main() -> int:  # 主函数，返回进程退出码。
         best_kp: Optional[float] = None
         should_save_single_plot = not args.no_plot
         base_req = MotionRequest(
-            position=args.position,
+            position=args.position if args.position is not None else 0.0,
             vel=args.vel,
             acc=args.acc,
             pipeline=args.pipeline,
@@ -2354,7 +2359,7 @@ def main() -> int:  # 主函数，返回进程退出码。
             if kp_trials_summary_csv_path is not None:
                 print(f"kp_trials_summary_csv: {kp_trials_summary_csv_path}")
             if baseline_result is not None and best_result is not None and not args.no_plot:
-                plot_base_path = Path(args.plot_output or default_plot_path(base_req.position))
+                plot_base_path = Path(args.plot_output or default_auto_tune_plot_path())
                 for action_label in action_labels:
                     baseline_plot_trial = find_raw_trial(baseline_result, action_label, repeat_index=2)
                     best_plot_trial = find_raw_trial(best_result, action_label, repeat_index=2)
