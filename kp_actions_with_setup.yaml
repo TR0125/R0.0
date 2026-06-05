@@ -1,0 +1,140 @@
+actions:
+  left_arm_1_joint:
+    setup:
+      left_arm_2_joint: 0.0
+      left_arm_3_joint: 0.0
+      left_arm_4_joint: 0.0
+      left_arm_5_joint: 0.0
+      left_arm_6_joint: 0.0
+      left_arm_7_joint: 0.0
+    positions: [-0.5, 0.5, 1]
+
+  left_arm_2_joint:
+    setup:
+      left_arm_1_joint: 0.0
+      left_arm_3_joint: 0.0
+      left_arm_4_joint: 0.0
+      left_arm_5_joint: 0.0
+      left_arm_6_joint: 0.0
+      left_arm_7_joint: 0.0
+    positions: [0.5, -0.5, -1]
+
+  left_arm_3_joint:
+    setup:
+      left_arm_1_joint: 0.0
+      left_arm_2_joint: -0.9
+      left_arm_4_joint: -1.75
+      left_arm_5_joint: 0.0
+      left_arm_6_joint: 0.0
+      left_arm_7_joint: 0.0
+    positions: [0.17, 0.5, 0.2]
+
+  left_arm_4_joint:
+    setup:
+      left_arm_1_joint: 0.0
+      left_arm_2_joint: -0.9
+      left_arm_3_joint: 0.17
+      left_arm_5_joint: 0.0
+      left_arm_6_joint: 0.0
+      left_arm_7_joint: 0.0
+    positions: [-0.5, 1, 0.5]
+
+  left_arm_5_joint:
+    setup:
+      left_arm_1_joint: 0.0
+      left_arm_2_joint: -1.57
+      left_arm_3_joint: 0.0
+      left_arm_4_joint: -1.57
+      left_arm_6_joint: 0.0
+      left_arm_7_joint: 0.0
+    positions: [-1, 1, -0.5]
+
+  left_arm_6_joint:
+    setup:
+      left_arm_1_joint: 0.0
+      left_arm_2_joint: -1.57
+      left_arm_3_joint: 0.0
+      left_arm_4_joint: -1.57
+      left_arm_5_joint: 0.0
+      left_arm_7_joint: 0.0
+    positions: [-1, 1, -0.5]
+
+  left_arm_7_joint:
+    setup:
+      left_arm_1_joint: 0.0
+      left_arm_2_joint: -1.57
+      left_arm_3_joint: 0.0
+      left_arm_4_joint: -1.57
+      left_arm_5_joint: 0.0
+      left_arm_6_joint: 0.0
+    positions: [-0.5, 1, -1]
+
+  right_arm_1_joint:
+    setup:
+      right_arm_2_joint: 0.0
+      right_arm_3_joint: 0.0
+      right_arm_4_joint: 0.0
+      right_arm_5_joint: 0.0
+      right_arm_6_joint: 0.0
+      right_arm_7_joint: 0.0
+    positions: [0.5, -0.5, -1]
+
+  right_arm_2_joint:
+    setup:
+      right_arm_1_joint: 0.0
+      right_arm_3_joint: 0.0
+      right_arm_4_joint: 0.0
+      right_arm_5_joint: 0.0
+      right_arm_6_joint: 0.0
+      right_arm_7_joint: 0.0
+    positions: [0.5, 1.57, 0.2]
+
+  right_arm_3_joint:
+    setup:
+      right_arm_1_joint: 0.0
+      right_arm_2_joint: 0.9
+      right_arm_4_joint: 1.75
+      right_arm_5_joint: 0.0
+      right_arm_6_joint: 0.0
+      right_arm_7_joint: 0.0
+    positions: [-0.17, 0.5, 0.2]
+
+  right_arm_4_joint:
+    setup:
+      right_arm_1_joint: 0.0
+      right_arm_2_joint: 0.9
+      right_arm_3_joint: -0.17
+      right_arm_5_joint: 0.0
+      right_arm_6_joint: 0.0
+      right_arm_7_joint: 0.0
+    positions: [0.5, 1, -0.5]
+
+  right_arm_5_joint:
+    setup:
+      right_arm_1_joint: 0.0
+      right_arm_2_joint: 1.57
+      right_arm_3_joint: 0.0
+      right_arm_4_joint: 1.57
+      right_arm_6_joint: 0.0
+      right_arm_7_joint: 0.0
+    positions: [1, -1, 0.5]
+
+  right_arm_6_joint:
+    setup:
+      right_arm_1_joint: 0.0
+      right_arm_2_joint: 1.57
+      right_arm_3_joint: 0.0
+      right_arm_4_joint: 1.57
+      right_arm_5_joint: 0.0
+      right_arm_7_joint: 0.0
+    positions: [1, -1, 0.5]
+
+  right_arm_7_joint:
+    setup:
+      right_arm_1_joint: 0.0
+      right_arm_2_joint: 1.57
+      right_arm_3_joint: 0.0
+      right_arm_4_joint: 1.57
+      right_arm_5_joint: 0.0
+      right_arm_6_joint: 0.0
+    positions: [0.5, -1, 1]
