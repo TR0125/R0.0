@@ -14,12 +14,46 @@ from pathlib import Path  # 用于处理响应曲线图输出路径。
 from typing import Optional  # 用于标注可能为空的状态字段。
 
 
-JOINT_NAME = "right_arm_1_joint"  # 当前脚本控制并监测的目标关节名。
+@dataclass(frozen=True)
+class ArmJointSpec:  # 保存单个手臂关节的控制器和 EtherCAT 映射。
+    joint_name: str
+    group: str
+    state_topic: str
+    kp_alias: int
+
+
+LEFT_ARM_JOINTS = [f"left_arm_{index}_joint" for index in range(1, 8)]
+RIGHT_ARM_JOINTS = [f"right_arm_{index}_joint" for index in range(1, 8)]
+ALL_ARM_JOINTS = LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS
+DEFAULT_JOINT_NAME = "right_arm_1_joint"
+ARM_JOINT_SPECS = {
+    **{
+        joint_name: ArmJointSpec(
+            joint_name=joint_name,
+            group="l_arm",
+            state_topic="/l_arm_controller/controller_state",
+            kp_alias=1102 + index,
+        )
+        for index, joint_name in enumerate(LEFT_ARM_JOINTS)
+    },
+    **{
+        joint_name: ArmJointSpec(
+            joint_name=joint_name,
+            group="r_arm",
+            state_topic="/r_arm_controller/controller_state",
+            kp_alias=1109 + index,
+        )
+        for index, joint_name in enumerate(RIGHT_ARM_JOINTS)
+    },
+}
+JOINT_NAME = DEFAULT_JOINT_NAME  # 当前脚本控制并监测的目标关节名，会在 parse_args 后按参数更新。
+COMMAND_GROUP = ARM_JOINT_SPECS[DEFAULT_JOINT_NAME].group  # ExecuteCommand 使用的 MoveIt group。
 POSITION_EPSILON = 1e-6  # 用于判断“目标已达到/几乎无位移”的最小阈值。
-DEFAULT_KP_ALIAS = 1109  # 右臂一关节在 EtherCAT 上的固定 alias。
+DEFAULT_KP_ALIAS = ARM_JOINT_SPECS[DEFAULT_JOINT_NAME].kp_alias  # 默认关节的 EtherCAT alias。
 DEFAULT_KP_INDEX = "0x2006"  # 位置环 P 参数的 SDO index。
 DEFAULT_KP_SUBINDEX = 0  # 位置环 P 参数的 SDO subindex。
 FLOAT_PATTERN = re.compile(r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?")  # 用于从命令输出中提取浮点数字。
+DEFAULT_AUTO_TUNE_ACTION_COUNT = 3  # 自动调参默认使用 3 个测试动作。
 RMSE_TARGET_DEG = 0.01  # 搜索代价中的 RMSE 参考目标，按角度制指定为 0.01 度。
 RMSE_TARGET_RAD = math.radians(RMSE_TARGET_DEG)  # 搜索代价内部统一换算成弧度参与归一化。
 PHASE_LAG_TARGET_DEG = 2.0  # 搜索代价中的相位滞后参考目标，按角度制指定为 2 度。
@@ -66,6 +100,111 @@ AUTO_TUNE_MAX_STAGES = 3  # 自动调参最多串行执行 3 个阶段：趋势�
 AUTO_TUNE_STAGE_ITERATIONS = (4, 6, 8)  # 三阶段默认预算分配；用户指定更大迭代数时按比例放大。
 AUTO_TUNE_STAGE_HALF_WIDTHS = (0.10, 0.08, 0.03)  # 后续阶段围绕上一阶段最优点自动收窄搜索区间的半宽度。
 AUTO_TUNE_MIN_ITERATIONS = AUTO_TUNE_MAX_STAGES * KP_BAYES_INITIAL_SAMPLE_COUNT  # 若要真正完成 3 个阶段，至少要给到每阶段 low/mid/high 三个点评估预算。
+
+
+def sanitize_identifier(value: str) -> str:  # 将关节名转成可用于 ROS node name / 文件名的安全字符串。
+    return re.sub(r"[^A-Za-z0-9_]+", "_", value)
+
+
+def configure_joint_context(args: argparse.Namespace) -> None:  # 根据 --joint-name 解析本次运行的关节上下文。
+    global JOINT_NAME, COMMAND_GROUP
+    spec = ARM_JOINT_SPECS.get(args.joint_name)
+    if spec is None:
+        missing = []
+        if args.group is None:
+            missing.append("--group")
+        if args.state_topic is None:
+            missing.append("--state-topic")
+        if args.auto_tune_kp and args.kp_alias is None:
+            missing.append("--kp-alias")
+        if missing:
+            raise ValueError(
+                f"Unknown joint {args.joint_name!r}; provide {'/'.join(missing)} explicitly"
+            )
+        resolved_group = args.group
+        resolved_state_topic = args.state_topic
+        resolved_kp_alias = args.kp_alias
+    else:
+        resolved_group = args.group or spec.group
+        resolved_state_topic = args.state_topic or spec.state_topic
+        resolved_kp_alias = args.kp_alias if args.kp_alias is not None else spec.kp_alias
+
+    JOINT_NAME = args.joint_name
+    COMMAND_GROUP = resolved_group
+    args.group = resolved_group
+    args.state_topic = resolved_state_topic
+    args.kp_alias = resolved_kp_alias
+
+
+def parse_action_positions(raw_value: str) -> list[float]:  # 解析 "0.1,0.2,0.3" 形式的非交互测试动作。
+    values = [part.strip() for part in raw_value.split(",") if part.strip()]
+    if not values:
+        raise ValueError("--auto-tune-actions must contain at least one numeric position")
+    try:
+        return [float(value) for value in values]
+    except ValueError as exc:
+        raise ValueError(f"Invalid --auto-tune-actions value {raw_value!r}") from exc
+
+
+def parse_joint_position_map(raw_value: str) -> dict[str, float]:  # 解析 "joint_a:0.1,joint_b:-0.2" 形式的关节目标映射。
+    result: dict[str, float] = {}
+    items = [part.strip() for part in raw_value.split(",") if part.strip()]
+    if not items:
+        raise ValueError("--setup-joints must contain at least one joint:position pair")
+
+    for item in items:
+        joint_name, separator, position_text = item.partition(":")
+        joint_name = joint_name.strip()
+        position_text = position_text.strip()
+        if not separator or not joint_name or not position_text:
+            raise ValueError(f"Invalid --setup-joints item {item!r}; expected joint_name:position")
+        if joint_name in result:
+            raise ValueError(f"Duplicate setup joint in --setup-joints: {joint_name}")
+        if joint_name not in ALL_ARM_JOINTS:
+            raise ValueError(f"Unknown setup joint in --setup-joints: {joint_name}")
+        try:
+            result[joint_name] = float(position_text)
+        except ValueError as exc:
+            raise ValueError(f"Invalid setup position for {joint_name}: {position_text!r}") from exc
+
+    return result
+
+
+def arm_joints_for(joint_name: str) -> list[str]:  # 返回目标关节所属手臂的 7 个关节，用于校验 setup 姿态。
+    if joint_name in LEFT_ARM_JOINTS:
+        return LEFT_ARM_JOINTS
+    if joint_name in RIGHT_ARM_JOINTS:
+        return RIGHT_ARM_JOINTS
+    raise ValueError(f"Setup joints are only supported for known arm joints: {joint_name}")
+
+
+def validate_setup_joints(joint_name: str, setup: dict[str, float]) -> None:  # setup 必须是同臂除目标外的完整 6 个辅助关节。
+    if not setup:
+        return
+
+    arm_joints = arm_joints_for(joint_name)
+    expected = [joint for joint in arm_joints if joint != joint_name]
+    expected_set = set(expected)
+    actual_set = set(setup)
+    missing = [joint for joint in expected if joint not in actual_set]
+    extra = sorted(actual_set - expected_set)
+
+    if missing or extra:
+        details = []
+        if missing:
+            details.append(f"missing setup joint(s): {', '.join(missing)}")
+        if extra:
+            details.append(f"unexpected setup joint(s): {', '.join(extra)}")
+        raise ValueError(
+            f"--setup-joints for {joint_name} must define exactly the other 6 joints in the same arm; "
+            + "; ".join(details)
+        )
+
+
+def ordered_joint_positions(joint_positions: dict[str, float]) -> list[tuple[str, float]]:  # 按左右臂自然顺序输出命令，便于 dry-run 排查。
+    ordered_names = [joint for joint in ALL_ARM_JOINTS if joint in joint_positions]
+    ordered_names.extend(joint for joint in joint_positions if joint not in ordered_names)
+    return [(joint_name, joint_positions[joint_name]) for joint_name in ordered_names]
 
 
 @dataclass
@@ -170,6 +309,7 @@ class MotionRequest:  # 单次运动试验的参数配置，替代原地修改 a
     spin_timeout: float = 10.0  # 本地等待服务响应的超时，单位秒。
     state_timeout: float = 2.0  # 等待初始控制器状态的超时，单位秒。
     observe_window: float = 3.0  # 命令发出后继续采样的时间，单位秒。
+    joint_positions: Optional[dict[str, float]] = None  # setup 阶段可一次性命令同臂多个关节到固定姿态。
 
 
 @dataclass
@@ -567,11 +707,13 @@ def _comparison_error_limits(
 
 
 def default_kp_trials_raw_csv_path() -> str:  # 生成默认的 Kp 调参原始 trial CSV 路径。
-    return str(Path(__file__).with_name("kp_trials_raw.csv"))
+    file_name = "kp_trials_raw.csv" if JOINT_NAME == DEFAULT_JOINT_NAME else f"{JOINT_NAME}_kp_trials_raw.csv"
+    return str(Path(__file__).with_name(file_name))
 
 
 def default_kp_trials_summary_csv_path() -> str:  # 生成默认的 Kp 调参聚合摘要 CSV 路径。
-    return str(Path(__file__).with_name("kp_trials_summary.csv"))
+    file_name = "kp_trials_summary.csv" if JOINT_NAME == DEFAULT_JOINT_NAME else f"{JOINT_NAME}_kp_trials_summary.csv"
+    return str(Path(__file__).with_name(file_name))
 
 
 def comparison_action_plot_path(base_output: str, action_label: str) -> str:  # 生成分动作对比图路径。
@@ -1668,10 +1810,15 @@ def save_comparison_plot(
 
 
 def build_command(req: MotionRequest) -> str:  # 根据 MotionRequest 拼接 ExecuteCommand 所需的命令字符串。
+    joint_positions = req.joint_positions or {JOINT_NAME: req.position}
+    joint_targets = ",".join(
+        f"{joint_name}:{position:.12g}"
+        for joint_name, position in ordered_joint_positions(joint_positions)
+    )
     parts = [
-        "group=r_arm",
+        f"group={COMMAND_GROUP}",
         "type=joints",
-        f"joints={JOINT_NAME}:{req.position}",
+        f"joints={joint_targets}",
         f"vel={req.vel}",
         f"acc={req.acc}",
         f"pipeline={req.pipeline}",
@@ -1683,13 +1830,23 @@ def build_command(req: MotionRequest) -> str:  # 根据 MotionRequest 拼接 Exe
 
 def parse_args() -> argparse.Namespace:  # 定义并解析命令行参数。
     parser = argparse.ArgumentParser(  # 创建参数解析器，并设置帮助说明。
-        description="Control right_arm_1_joint via /cli_controller/execute_command."
+        description="Control one arm joint via /cli_controller/execute_command and optionally auto-tune its Kp."
     )
     parser.add_argument(  # 添加位置参数 `position`。
         "position",
         nargs="?",
         type=float,
-        help="Target joint position for right_arm_1_joint, in radians. Required for single-motion mode; ignored by auto-tune mode.",
+        help="Target joint position in radians. Required for single-motion mode; ignored by auto-tune mode.",
+    )
+    parser.add_argument(  # 添加可选参数 `--joint-name`，用于选择要控制和调参的关节。
+        "--joint-name",
+        default=DEFAULT_JOINT_NAME,
+        help=f"Arm joint to control. Default: {DEFAULT_JOINT_NAME}",
+    )
+    parser.add_argument(  # 添加可选参数 `--group`，用于覆盖 MoveIt group。
+        "--group",
+        default=None,
+        help="MoveIt group used by ExecuteCommand. Default: inferred from --joint-name",
     )
     parser.add_argument(  # 添加可选参数 `--service`。
         "--service",
@@ -1742,8 +1899,8 @@ def parse_args() -> argparse.Namespace:  # 定义并解析命令行参数。
     )
     parser.add_argument(  # 添加可选参数 `--state-topic`，用于指定控制器状态话题。
         "--state-topic",
-        default="/r_arm_controller/controller_state",
-        help="Controller state topic used to plot reference and feedback. Default: /r_arm_controller/controller_state",
+        default=None,
+        help="Controller state topic used to plot reference and feedback. Default: inferred from --joint-name",
     )
     parser.add_argument(  # 添加可选参数 `--state-timeout`，用于限制等待初始控制器状态的时间。
         "--state-timeout",
@@ -1772,11 +1929,25 @@ def parse_args() -> argparse.Namespace:  # 定义并解析命令行参数。
         action="store_true",
         help="Automatically search for a better position-loop Kp before the final run.",
     )
+    parser.add_argument(  # 添加可选参数 `--auto-tune-actions`，用于非交互指定 3 个测试角度。
+        "--auto-tune-actions",
+        default=None,
+        help="Comma-separated target positions for Kp auto-tune, e.g. 0.1,0.3,0.5. Default: prompt manually",
+    )
+    parser.add_argument(  # 添加可选参数 `--setup-joints`，用于每个测试动作前先移动同臂 6 个辅助关节到固定姿态。
+        "--setup-joints",
+        default=None,
+        help=(
+            "Comma-separated same-arm helper joint positions applied before each auto-tune trial, "
+            "e.g. left_arm_1_joint:0.1,left_arm_3_joint:-0.2. "
+            "Must define exactly the other 6 joints in the same arm as --joint-name."
+        ),
+    )
     parser.add_argument(  # 添加可选参数 `--kp-alias`，用于指定 EtherCAT alias。
         "--kp-alias",
         type=int,
-        default=DEFAULT_KP_ALIAS,
-        help=f"EtherCAT alias of the joint drive. Default: {DEFAULT_KP_ALIAS}",
+        default=None,
+        help="EtherCAT alias of the joint drive. Default: inferred from --joint-name",
     )
     parser.add_argument(  # 添加可选参数 `--kp-min`，不指定时自动在当前 Kp 下方浮动 kp_range。
         "--kp-min",
@@ -1794,7 +1965,7 @@ def parse_args() -> argparse.Namespace:  # 定义并解析命令行参数。
         "--kp-range",
         type=float,
         default=None,
-        help=f"Absolute Kp search offset from current Kp. Default: center the initial stage around current Kp with +/-{DEFAULT_KP_RELATIVE_RANGE_RATIO * 100:.0f}% if kp-min/max are not set",
+        help=f"Absolute Kp search offset from current Kp. Default: center the initial stage around current Kp with +/-{DEFAULT_KP_RELATIVE_RANGE_RATIO * 100:.0f}%% if kp-min/max are not set",
     )
     parser.add_argument(  # 添加可选参数 `--kp-hard-max`，限制自动调参时允许探索的绝对最高 Kp。
         "--kp-hard-max",
@@ -1819,15 +1990,39 @@ def parse_args() -> argparse.Namespace:  # 定义并解析命令行参数。
         default=12,
         help="Maximum number of Kp candidate evaluations across the 3-stage auto-tuning flow. Minimum: 9. Default: 12",
     )
+    parser.add_argument(  # 添加可选参数 `--kp-raw-csv-output`，用于指定原始 trial CSV 路径。
+        "--kp-raw-csv-output",
+        default=None,
+        help="CSV output path for raw Kp trials. Default: auto-generated in the script directory",
+    )
+    parser.add_argument(  # 添加可选参数 `--kp-summary-csv-output`，用于指定聚合摘要 CSV 路径。
+        "--kp-summary-csv-output",
+        default=None,
+        help="CSV output path for aggregated Kp trial summaries. Default: auto-generated in the script directory",
+    )
     return parser.parse_args()
 
 
 def main() -> int:  # 主函数，返回进程退出码。
     args = parse_args()
+    try:
+        configure_joint_context(args)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    try:
+        setup_joint_positions = (
+            parse_joint_position_map(args.setup_joints) if args.setup_joints else {}
+        )
+        validate_setup_joints(JOINT_NAME, setup_joint_positions)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    args.setup_joint_positions = setup_joint_positions
+
     if not args.auto_tune_kp and args.position is None:
         print("position is required unless --auto-tune-kp is used", file=sys.stderr)
         return 2
-
     try:  # 尝试导入 ROS 2 运行和关节反馈测量所需的模块。
         import rclpy  # ROS 2 Python 客户端库。
         from control_msgs.msg import JointTrajectoryControllerState  # 导入控制器状态消息，用于读取 reference 和 feedback。
@@ -1856,7 +2051,7 @@ def main() -> int:  # 主函数，返回进程退出码。
 
     class ExecuteCommandClient(Node):  # 定义一个最小 ROS 2 客户端节点，用于调用 ExecuteCommand 服务。
         def __init__(self, service: str, state_topic: str) -> None:  # 初始化节点、服务客户端和控制器状态订阅。
-            super().__init__("move_right_arm_1_joint_client")
+            super().__init__(f"move_{sanitize_identifier(JOINT_NAME)}_client")
             self._client = self.create_client(ExecuteCommand, service)
             self._controller_state_sub = self.create_subscription(
                 JointTrajectoryControllerState,
@@ -2009,29 +2204,36 @@ def main() -> int:  # 主函数，返回进程退出码。
         finally:
             node.clear_response_tracking()
 
-    def move_joint_to(position: float, base_req: MotionRequest) -> None:  # 用当前脚本同一路径把关节移动到指定位置，便于候选试验前回到统一起点。
-        reset_req = replace(base_req, position=position)
+    def setup_joint_positions_for(target_position: float) -> Optional[dict[str, float]]:  # 生成“辅助关节固定 + 被调关节回位”的 setup 命令目标。
+        if not args.setup_joint_positions:
+            return None
+        joint_positions = dict(args.setup_joint_positions)
+        joint_positions[JOINT_NAME] = target_position
+        return joint_positions
+
+    def move_joint_to(position: float, base_req: MotionRequest) -> None:  # 每个 trial 前回到统一测试姿态；setup 阶段不参与评分。
+        reset_req = replace(
+            base_req,
+            position=position,
+            joint_positions=setup_joint_positions_for(position),
+        )
         _, _, _, _, _ = run_single_motion_trial(reset_req)
 
-    def prompt_manual_action_requests(
+    def build_seeded_action_requests(
+        action_positions: list[float],
         base_req: MotionRequest,
         reset_position: float,
         kp: float,
-    ) -> tuple[list[tuple[str, float, MotionRequest]], dict[str, list[SingleTrialResult]]]:  # 依次提示用户输入 3 个动作角度，并立即运行一次生成预览图。
+        label_prefix: str = "input",
+    ) -> tuple[list[tuple[str, float, MotionRequest]], dict[str, list[SingleTrialResult]]]:  # 将目标角度转成测试动作，并先用原始 Kp 预跑一次。
+        if not action_positions:
+            raise RuntimeError("No auto-tune action positions were provided")
         action_specs: list[tuple[str, float, MotionRequest]] = []
         seeded_trials: dict[str, list[SingleTrialResult]] = {}
         preview_base_output = args.plot_output or default_auto_tune_plot_path()
-        for index in range(3):
-            action_label = f"input_{index + 1}"
-            while True:
-                raw_value = input(f"{action_label} target position (rad): ").strip()
-                try:
-                    action_position = float(raw_value)
-                except ValueError:
-                    print(f"{action_label}: invalid float value {raw_value!r}, please re-enter")
-                    continue
-                break
-
+        for index, action_position in enumerate(action_positions):
+            action_label = f"{label_prefix}_{index + 1}"
+            print(f"{action_label} target position (rad): {action_position:.6f}")
             action_req = replace(base_req, position=action_position)
             action_specs.append((action_label, reset_position, action_req))
 
@@ -2057,6 +2259,24 @@ def main() -> int:  # 主函数，返回进程退出码。
                     print(f"{action_label} preview_plot: unavailable ({exc})")
 
         return action_specs, seeded_trials
+
+    def prompt_manual_action_requests(
+        base_req: MotionRequest,
+        reset_position: float,
+        kp: float,
+    ) -> tuple[list[tuple[str, float, MotionRequest]], dict[str, list[SingleTrialResult]]]:  # 依次提示用户输入 3 个动作角度，并立即运行一次生成预览图。
+        action_positions: list[float] = []
+        for index in range(DEFAULT_AUTO_TUNE_ACTION_COUNT):
+            action_label = f"input_{index + 1}"
+            while True:
+                raw_value = input(f"{action_label} target position (rad): ").strip()
+                try:
+                    action_positions.append(float(raw_value))
+                except ValueError:
+                    print(f"{action_label}: invalid float value {raw_value!r}, please re-enter")
+                    continue
+                break
+        return build_seeded_action_requests(action_positions, base_req, reset_position, kp)
 
     def evaluate_kp_candidate(
         kp: float,
@@ -2132,7 +2352,16 @@ def main() -> int:  # 主函数，返回进程退出码。
             f"kp_original: {original_kp:.6f}, search_interval: [{low:.6f}, {high:.6f}], hard_max: {hard_max:.6f}"
             )
         _, reset_position = node.wait_for_controller_state(req.state_timeout)
-        action_specs, baseline_seeded_trials = prompt_manual_action_requests(req, reset_position, original_kp)
+        if args.auto_tune_actions is not None:
+            action_positions = parse_action_positions(args.auto_tune_actions)
+            action_specs, baseline_seeded_trials = build_seeded_action_requests(
+                action_positions,
+                req,
+                reset_position,
+                original_kp,
+            )
+        else:
+            action_specs, baseline_seeded_trials = prompt_manual_action_requests(req, reset_position, original_kp)
         baseline_result = evaluate_kp_candidate(original_kp, action_specs, baseline_seeded_trials)
         print_metrics(baseline_result.metrics, prefix=f"kp={original_kp:.6f} ")
         print_trial_summary(baseline_result, prefix=f"kp={original_kp:.6f} ")
@@ -2297,6 +2526,16 @@ def main() -> int:  # 主函数，返回进程退出码。
             reset_position=reset_position,
         )
 
+    print(
+        f"joint_context: joint={JOINT_NAME} group={COMMAND_GROUP} "
+        f"state_topic={args.state_topic} kp_alias={args.kp_alias}"
+    )
+    if args.setup_joint_positions:
+        setup_text = ",".join(
+            f"{joint_name}:{position:.6f}"
+            for joint_name, position in ordered_joint_positions(args.setup_joint_positions)
+        )
+        print(f"setup_joints: {setup_text}")
     rclpy.init()
     node = ExecuteCommandClient(args.service, args.state_topic)
     kp_restore_value: Optional[float] = None
@@ -2340,8 +2579,8 @@ def main() -> int:  # 主函数，返回进程退出码。
                 baseline_result,
                 history,
                 best_kp,
-                default_kp_trials_raw_csv_path(),
-                default_kp_trials_summary_csv_path(),
+                args.kp_raw_csv_output or default_kp_trials_raw_csv_path(),
+                args.kp_summary_csv_output or default_kp_trials_summary_csv_path(),
             )
             should_save_single_plot = False
         else:
