@@ -1,0 +1,15 @@
+protocol_gateway:
+  ros__parameters:
+    # Match the documented Swagger/default service port from the protocol PDF.
+    bind_host: 0.0.0.0
+    bind_port: 8283
+    # Externally reachable status callback service address on the Orange Pi.
+    # The gateway replies with this address so the robot knows where to push
+    # /robot/status and related callback traffic.
+    service_host: 192.168.1.25
+    service_port: 8283
+    register_endpoint: ''
+    mission_endpoint: ''
+    status_endpoints: ''
+    command_endpoint: ''
+    map_endpoint: ''
