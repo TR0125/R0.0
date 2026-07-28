@@ -587,7 +587,7 @@ def write_kp(alias: int, index: str, subindex: int, value: float) -> None:  # �
 
 def default_plot_path(target_position: float) -> str:  # 生成默认响应曲线图文件名，避免每次都手工指定路径。
     safe_target = str(target_position).replace("-", "neg_").replace(".", "_")
-    return str(Path(__file__).with_name(f"right_arm_1_joint_response_{safe_target}.png"))
+    return str(Path(__file__).with_name(f"{JOINT_NAME}_response_{safe_target}.png"))
 
 
 def default_auto_tune_plot_path() -> str:  # 自动调参模式的默认图片基名，不再依赖命令行 position。
